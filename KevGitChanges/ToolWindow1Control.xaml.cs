@@ -1,6 +1,14 @@
-﻿using System.Diagnostics.CodeAnalysis;
+﻿using System.Threading.Tasks;
+using System;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Runtime.InteropServices;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 
 namespace KevGitChanges
 {
@@ -9,26 +17,1516 @@ namespace KevGitChanges
     /// </summary>
     public partial class ToolWindow1Control : UserControl
     {
+        private string currentWorkDir;
+        private string currentBaseBranch;
+        private string currentBranch;
+        private string currentMainRef;
+        private const string selectedRemote = "origin";
+        private const string LoadingLabel = "Loading...";
+        private EnvDTE.SolutionEvents solutionEvents;
+        private ImageSource folderIcon;
+        private ImageSource fileIcon;
+        private bool showWorkspace = true;
+        private bool showLocal = true;
+        private bool showRemote = true;
+        private bool showMain = true;
+        private IVsOutputWindowPane outputPane;
+        private static readonly Guid OutputPaneGuid = new Guid("1C6450F7-14B0-4D9D-8C41-9B2D95C0F4D2");
+
+        private readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> scopeMap =
+            new System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>>(System.StringComparer.OrdinalIgnoreCase);
+
+        private static readonly Brush StatusAddedBrush = new SolidColorBrush(Color.FromRgb(34, 197, 94));
+        private static readonly Brush StatusModifiedBrush = new SolidColorBrush(Color.FromRgb(59, 130, 246));
+        private static readonly Brush StatusDeletedBrush = new SolidColorBrush(Color.FromRgb(239, 68, 68));
+        private static readonly Brush StatusOtherBrush = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+
+        private enum ChangeScope
+        {
+            Workspace,
+            Local,
+            Remote,
+            Main
+        }
+
+        static ToolWindow1Control()
+        {
+            FreezeBrush(StatusAddedBrush);
+            FreezeBrush(StatusModifiedBrush);
+            FreezeBrush(StatusDeletedBrush);
+            FreezeBrush(StatusOtherBrush);
+        }
+
         /// <summary>
         /// Initializes a new instance of the <see cref="ToolWindow1Control"/> class.
         /// </summary>
         public ToolWindow1Control()
         {
             this.InitializeComponent();
+            this.Loaded += ToolWindow1Control_Loaded;
         }
 
-        /// <summary>
-        /// Handles click on the button by displaying a message box.
-        /// </summary>
-        /// <param name="sender">The event sender.</param>
-        /// <param name="e">The event args.</param>
-        [SuppressMessage("Microsoft.Globalization", "CA1300:SpecifyMessageBoxOptions", Justification = "Sample code")]
-        [SuppressMessage("StyleCop.CSharp.NamingRules", "SA1300:ElementMustBeginWithUpperCaseLetter", Justification = "Default event handler naming pattern")]
-        private void button1_Click(object sender, RoutedEventArgs e)
+        private void ToolWindow1Control_Loaded(object sender, RoutedEventArgs e)
         {
-            MessageBox.Show(
-                string.Format(System.Globalization.CultureInfo.CurrentUICulture, "Invoked '{0}'", this.ToString()),
-                "Kev Git Changes");
+            // determine solution dir as default work dir
+            try
+            {
+                var dte = Microsoft.VisualStudio.Shell.Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+                var solutionPath = dte?.Solution?.FullName;
+                if (!string.IsNullOrWhiteSpace(solutionPath) && System.IO.File.Exists(solutionPath))
+                {
+                    currentWorkDir = System.IO.Path.GetDirectoryName(solutionPath);
+                }
+            }
+            catch { }
+
+            if (string.IsNullOrWhiteSpace(currentWorkDir))
+            {
+                currentWorkDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+            }
+
+            EnsureIcons();
+            InitializeCompareOptions();
+            UpdateScopeLabels();
+
+            // populate base branches from origin for the default workdir
+            PopulateBaseBranches(currentWorkDir, selectedRemote);
+
+            // start initial refresh only once the solution is loaded
+            try
+            {
+                var dte = Microsoft.VisualStudio.Shell.Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+                if (dte != null)
+                {
+                    var sol = dte?.Solution;
+                    var solPath = sol?.FullName;
+                    if (!string.IsNullOrWhiteSpace(solPath) && System.IO.File.Exists(solPath))
+                    {
+                        // solution already open
+                        StartRefresh();
+                    }
+                    else
+                    {
+                        // wait for solution opened
+                        solutionEvents = dte.Events.SolutionEvents;
+                        solutionEvents.Opened += SolutionEvents_Opened;
+                    }
+                }
+                else
+                {
+                    // no DTE available, start refresh
+                    StartRefresh();
+                }
+            }
+            catch
+            {
+                StartRefresh();
+            }
+        }
+
+        private void SolutionEvents_Opened()
+        {
+            try
+            {
+                // unsubscribe
+                if (solutionEvents != null)
+                {
+                    solutionEvents.Opened -= SolutionEvents_Opened;
+                    solutionEvents = null;
+                }
+            }
+            catch { }
+
+            // start refresh now that the solution is opened
+            StartRefresh();
+        }
+
+        private void StartRefresh()
+        {
+            // show busy indicator and run refresh
+            Dispatcher.Invoke(() =>
+            {
+                BusyIndicator.Visibility = Visibility.Visible;
+                try { BaseBranchCombo.IsEnabled = false; } catch { }
+                try { fetchButton.IsEnabled = false; } catch { }
+                try { refreshButton.IsEnabled = false; } catch { }
+            });
+            _ = Task.Run(async () =>
+            {
+                await DoRefreshAsync();
+                Dispatcher.Invoke(() =>
+                {
+                    BusyIndicator.Visibility = Visibility.Collapsed;
+                    try { BaseBranchCombo.IsEnabled = true; } catch { }
+                    try { fetchButton.IsEnabled = true; } catch { }
+                    try { refreshButton.IsEnabled = true; } catch { }
+                });
+            });
+        }
+
+        private async Task DoRefreshAsync()
+        {
+            // reuse existing Refresh_Click logic but without UI event args
+            await Task.Run(() =>
+            {
+                try
+                {
+                    // Use currentWorkDir determined on load; pick selected remote from UI
+                    string workDir = currentWorkDir;
+
+                    if (string.IsNullOrWhiteSpace(workDir))
+                    {
+                        // Prefer to use the opened solution path when available
+                        workDir = null;
+                    }
+                    try
+                    {
+                        var dte = Microsoft.VisualStudio.Shell.Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+                        var solutionPath = dte?.Solution?.FullName;
+                        if (!string.IsNullOrWhiteSpace(solutionPath) && System.IO.File.Exists(solutionPath))
+                        {
+                            workDir = System.IO.Path.GetDirectoryName(solutionPath);
+                        }
+                    }
+                    catch
+                    {
+                        // ignore and fallback
+                    }
+
+                    if (string.IsNullOrWhiteSpace(workDir))
+                    {
+                        var repoPath = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+
+                        // Try to find .git by walking up to solution root
+                        var dir = new System.IO.DirectoryInfo(repoPath);
+                        while (dir != null && !System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, ".git")))
+                        {
+                            dir = dir.Parent;
+                        }
+
+                        if (dir == null)
+                        {
+                            UpdateStatus("No git repository found.");
+                            return;
+                        }
+
+                        workDir = dir.FullName;
+                    }
+
+                    currentBranch = RunGit(workDir, "rev-parse --abbrev-ref HEAD");
+                    if (string.IsNullOrWhiteSpace(currentBranch))
+                    {
+                        UpdateStatus("Unable to determine current branch.");
+                        return;
+                    }
+                    currentBranch = currentBranch.Trim();
+
+                    // Refresh base branch list from remote
+                    PopulateBaseBranches(workDir, selectedRemote);
+
+                    string baseBranch = null;
+                    string selectedBase = null;
+                    this.Dispatcher.Invoke(() =>
+                    {
+                        selectedBase = BaseBranchCombo.SelectedItem as string;
+                    });
+
+                    if (!string.IsNullOrWhiteSpace(selectedBase))
+                    {
+                        baseBranch = selectedBase;
+                    }
+                    else
+                    {
+                        // Build a candidate list: remote branches (origin/*) and common local main/master/develop
+                        var candidates = new System.Collections.Generic.List<string>();
+
+                        // remote branches (query origin directly)
+                        var remoteList = RunGit(workDir, $"ls-remote --heads {selectedRemote}");
+                        if (!string.IsNullOrWhiteSpace(remoteList))
+                        {
+                            using (var sr = new System.IO.StringReader(remoteList))
+                            {
+                                string ln;
+                                while ((ln = sr.ReadLine()) != null)
+                                {
+                                    ln = ln.Trim();
+                                    if (string.IsNullOrWhiteSpace(ln)) continue;
+                                    var parts = ln.Split('\t');
+                                    if (parts.Length == 2)
+                                    {
+                                        var refname = parts[1];
+                                        if (refname.StartsWith("refs/heads/"))
+                                        {
+                                            var bname = refname.Substring("refs/heads/".Length);
+                                            candidates.Add(selectedRemote + "/" + bname);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // add common branch names
+                        candidates.AddRange(new[] { selectedRemote + "/main", selectedRemote + "/master", selectedRemote + "/develop", selectedRemote + "/dev", "main", "master", "develop", "dev" });
+
+                        // remove duplicates and exclude current
+                        var uniq = new System.Collections.Generic.HashSet<string>(candidates, System.StringComparer.OrdinalIgnoreCase);
+                        uniq.Remove("origin/" + currentBranch);
+                        uniq.Remove(currentBranch);
+
+                        // For each candidate compute merge-base timestamp; pick the candidate with the most recent merge-base
+                        long bestTs = 0;
+                        string bestCandidate = null;
+                        foreach (var cand in uniq)
+                        {
+                            if (string.IsNullOrWhiteSpace(cand)) continue;
+                            // Ensure candidate exists: rev-parse
+                            var exists = RunGit(workDir, $"rev-parse --verify {cand}");
+                            if (string.IsNullOrWhiteSpace(exists) && exists.Trim().StartsWith("fatal")) continue;
+
+                            var mergeBase = RunGit(workDir, $"merge-base {currentBranch} {cand}");
+                            if (string.IsNullOrWhiteSpace(mergeBase)) continue;
+                            mergeBase = mergeBase.Trim();
+
+                            var tsStr = RunGit(workDir, $"show -s --format=%ct {mergeBase}");
+                            if (long.TryParse((tsStr ?? string.Empty).Trim(), out long ts))
+                            {
+                                if (ts > bestTs)
+                                {
+                                    bestTs = ts;
+                                    bestCandidate = cand;
+                                }
+                            }
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(bestCandidate)) baseBranch = bestCandidate;
+                        else
+                        {
+                            // final fallback
+                            var hasMain = RunGit(workDir, $"rev-parse --verify {selectedRemote}/main");
+                            if (!string.IsNullOrWhiteSpace(hasMain)) baseBranch = selectedRemote + "/main";
+                            else baseBranch = selectedRemote + "/master";
+                        }
+                    }
+
+                    // show chosen base branch in UI
+                    currentWorkDir = workDir;
+                    currentBaseBranch = baseBranch;
+
+                    // If BaseBranchCombo has selection prefer that as the base branch
+                    this.Dispatcher.Invoke(() =>
+                    {
+                        var selected = BaseBranchCombo.SelectedItem as string;
+                        if (!string.IsNullOrWhiteSpace(selected))
+                        {
+                            currentBaseBranch = selected;
+                        }
+                    });
+
+                    UpdateScopeLabels();
+
+                    // Build scope maps for workspace, local, remote, main
+                    scopeMap.Clear();
+
+                    var workspaceTask = Task.Run(() => RunGit(workDir, "status --porcelain=v1"));
+                    var originBranch = selectedRemote + "/" + currentBranch;
+                    var baseExists = RefExists(workDir, currentBaseBranch);
+                    var originExists = RefExists(workDir, originBranch);
+
+                    var localTask = Task.Run(() =>
+                    {
+                        if (originExists)
+                        {
+                            // local commits not yet pushed
+                            return RunGit(workDir, $"diff --name-status {originBranch}..{currentBranch}");
+                        }
+                        if (baseExists)
+                        {
+                            return RunGit(workDir, $"diff --name-status {currentBaseBranch}..{currentBranch}");
+                        }
+                        return string.Empty;
+                    });
+                    var remoteTask = Task.Run(() =>
+                    {
+                        if (baseExists && originExists)
+                        {
+                            // pushed commits not yet merged to the release branch
+                            return RunGit(workDir, $"diff --name-status {currentBaseBranch}..{originBranch}");
+                        }
+                        return string.Empty;
+                    });
+                    var mainTask = Task.Run(() =>
+                    {
+                        currentMainRef = currentBaseBranch;
+                        if (string.IsNullOrWhiteSpace(currentMainRef) || !baseExists) return string.Empty;
+                        // overall delta vs the selected release branch
+                        return RunGit(workDir, $"diff --name-status {currentBaseBranch}..{currentBranch}");
+                    });
+
+                    Task.WaitAll(workspaceTask, localTask, remoteTask, mainTask);
+
+                    AddScopeStatusFromPorcelain(scopeMap, workspaceTask.Result, ChangeScope.Workspace);
+                    AddScopeStatusFromNameStatus(scopeMap, localTask.Result, ChangeScope.Local);
+                    AddScopeStatusFromNameStatus(scopeMap, remoteTask.Result, ChangeScope.Remote);
+                    AddScopeStatusFromNameStatus(scopeMap, mainTask.Result, ChangeScope.Main);
+
+                    UpdateListViews(scopeMap);
+                }
+                catch (System.Exception ex)
+                {
+                    UpdateStatus("Error: " + ex.Message);
+                }
+            });
+        }
+
+        // Remote selection removed; always use 'origin'
+
+        private void BaseBranchCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            var sel = BaseBranchCombo.SelectedItem as string;
+            if (!string.IsNullOrWhiteSpace(sel) && !IsLoadingLabel(sel))
+            {
+                currentBaseBranch = sel;
+                // persist selection for this repo
+                try
+                {
+                    SaveSelectedBaseBranch(currentWorkDir, sel);
+                }
+                catch { }
+            }
+            UpdateScopeLabels();
+        }
+
+        private void PopulateBaseBranches(string repoRoot, string remote)
+        {
+            if (string.IsNullOrWhiteSpace(repoRoot) || string.IsNullOrWhiteSpace(remote)) return;
+            var branches = new System.Collections.Generic.List<string>();
+            try
+            {
+                var outp = RunGit(repoRoot, $"for-each-ref refs/remotes/{remote} --format=%(refname:short)");
+                if (IsGitRepoError(outp))
+                {
+                    branches.Add(LoadingLabel);
+                    this.Dispatcher.Invoke(() =>
+                    {
+                        BaseBranchCombo.ItemsSource = branches;
+                        BaseBranchCombo.SelectedIndex = 0;
+                    });
+                    return;
+                }
+                if (!string.IsNullOrWhiteSpace(outp))
+                {
+                    using (var sr = new System.IO.StringReader(outp))
+                    {
+                        string ln;
+                        while ((ln = sr.ReadLine()) != null)
+                        {
+                            ln = ln.Trim();
+                            if (string.IsNullOrWhiteSpace(ln)) continue;
+                            var full = ln.Trim();
+                            if (!string.IsNullOrWhiteSpace(full))
+                            {
+                                if (!branches.Contains(full)) branches.Add(full);
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            this.Dispatcher.Invoke(() =>
+            {
+                BaseBranchCombo.ItemsSource = branches;
+                // try to restore previously selected base for this repo
+                var saved = LoadSelectedBaseBranch(repoRoot);
+                if (!string.IsNullOrWhiteSpace(saved) && branches.Contains(saved))
+                {
+                    BaseBranchCombo.SelectedItem = saved;
+                }
+                else if (branches.Count > 0)
+                {
+                    BaseBranchCombo.SelectedIndex = 0;
+                }
+            });
+        }
+
+        private void SaveSelectedBaseBranch(string repoRoot, string branch)
+        {
+            if (string.IsNullOrWhiteSpace(repoRoot) || string.IsNullOrWhiteSpace(branch) || IsLoadingLabel(branch)) return;
+            try
+            {
+                var file = GetRepoSettingsPath(repoRoot);
+                var dir = System.IO.Path.GetDirectoryName(file);
+                if (!System.IO.Directory.Exists(dir)) System.IO.Directory.CreateDirectory(dir);
+                System.IO.File.WriteAllText(file, branch);
+            }
+            catch { }
+        }
+
+        private string LoadSelectedBaseBranch(string repoRoot)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(repoRoot)) return null;
+                var file = GetRepoSettingsPath(repoRoot);
+                if (System.IO.File.Exists(file))
+                {
+                    var txt = System.IO.File.ReadAllText(file);
+                    return string.IsNullOrWhiteSpace(txt) ? null : txt.Trim();
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static string GetRepoSettingsPath(string repoRoot)
+        {
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            var dir = System.IO.Path.Combine(appData, "KevGitChanges");
+            var key = repoRoot.Trim().ToLowerInvariant();
+            var hash = ComputeSha1(key);
+            var repoName = System.IO.Path.GetFileName(repoRoot.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar));
+            repoName = SanitizeFileName(string.IsNullOrWhiteSpace(repoName) ? "repo" : repoName);
+            return System.IO.Path.Combine(dir, $"{repoName}.{hash}.basebranch");
+        }
+
+        private static string ComputeSha1(string input)
+        {
+            using (var sha1 = System.Security.Cryptography.SHA1.Create())
+            {
+                var bytes = System.Text.Encoding.UTF8.GetBytes(input ?? string.Empty);
+                var hash = sha1.ComputeHash(bytes);
+                var sb = new System.Text.StringBuilder(hash.Length * 2);
+                foreach (var b in hash) sb.Append(b.ToString("x2"));
+                return sb.ToString();
+            }
+        }
+
+        private static string SanitizeFileName(string name)
+        {
+            var invalid = System.IO.Path.GetInvalidFileNameChars();
+            var sb = new System.Text.StringBuilder(name.Length);
+            foreach (var ch in name)
+            {
+                sb.Append(System.Array.IndexOf(invalid, ch) >= 0 ? '_' : ch);
+            }
+            return sb.ToString();
+        }
+
+        private async void Refresh_Click(object sender, RoutedEventArgs e)
+        {
+            // Use StartRefresh to run refresh with busy indicator
+            StartRefresh();
+        }
+
+        private async void Fetch_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(currentWorkDir)) return;
+                Dispatcher.Invoke(() =>
+                {
+                    BusyIndicator.Visibility = Visibility.Visible;
+                    try { fetchButton.IsEnabled = false; } catch { }
+                    try { refreshButton.IsEnabled = false; } catch { }
+                });
+
+                await Task.Run(() =>
+                {
+                    RunGit(currentWorkDir, "fetch --all --prune");
+                    PopulateBaseBranches(currentWorkDir, selectedRemote);
+                });
+            }
+            finally
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    BusyIndicator.Visibility = Visibility.Collapsed;
+                    try { fetchButton.IsEnabled = true; } catch { }
+                    try { refreshButton.IsEnabled = true; } catch { }
+                });
+            }
+        }
+
+
+        private class ChangeItem
+        {
+            public string Path { get; set; }
+            public string WStatus { get; set; }
+            public string LStatus { get; set; }
+            public string RStatus { get; set; }
+            public string MStatus { get; set; }
+        }
+
+        // TreeNode is defined in TreeNode.cs as a public type for XAML access
+
+        private void UpdateListViews(System.Collections.Generic.IDictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> scopes)
+        {
+            var localItems = new System.Collections.Generic.List<ChangeItem>();
+            CaptureFilterState();
+
+            if (scopes != null)
+            {
+                var sortedPaths = new System.Collections.Generic.List<string>(scopes.Keys);
+                sortedPaths.Sort(System.StringComparer.OrdinalIgnoreCase);
+                foreach (var line in sortedPaths)
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    var trimmed = line.Trim();
+                    var nodeScopes = scopes[trimmed];
+                    var item = BuildChangeItem(trimmed, nodeScopes);
+                    if (item == null) continue;
+                    localItems.Add(item);
+                }
+            }
+
+            var localTree = BuildTree(localItems);
+
+            this.Dispatcher.Invoke(() =>
+            {
+                if (LocalTree != null) LocalTree.ItemsSource = localTree;
+                if (LocalCount != null) LocalCount.Text = $"({localItems.Count})";
+            });
+        }
+
+        private void CaptureFilterState()
+        {
+            try
+            {
+                this.Dispatcher.Invoke(() =>
+                {
+                    showWorkspace = ShowWorkspace == null || ShowWorkspace.IsChecked == true;
+                    showLocal = ShowLocal == null || ShowLocal.IsChecked == true;
+                    showRemote = ShowRemote == null || ShowRemote.IsChecked == true;
+                    showMain = ShowMain == null || ShowMain.IsChecked == true;
+                });
+            }
+            catch
+            {
+                showWorkspace = showLocal = showRemote = showMain = true;
+            }
+        }
+
+        private static void AddScopeStatusFromNameStatus(System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> target, string payload, ChangeScope scope)
+        {
+            if (target == null || string.IsNullOrWhiteSpace(payload)) return;
+            var trimmedPayload = payload.TrimStart();
+            if (trimmedPayload.StartsWith("fatal:", System.StringComparison.OrdinalIgnoreCase) ||
+                trimmedPayload.StartsWith("error:", System.StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+            using (var sr = new System.IO.StringReader(payload))
+            {
+                string line;
+                while ((line = sr.ReadLine()) != null)
+                {
+                    line = line.Trim();
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    if (line.StartsWith("fatal:", System.StringComparison.OrdinalIgnoreCase) ||
+                        line.StartsWith("error:", System.StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                    var parts = line.Split('\t');
+                    if (parts.Length < 2) continue;
+                    var statusToken = parts[0];
+                    var statusChar = statusToken.Length > 0 ? statusToken[0] : '?';
+                    var path = parts[parts.Length - 1];
+                    AddScopeStatus(target, path, scope, MapStatusChar(statusChar));
+                }
+            }
+        }
+
+        private static void AddScopeStatusFromPorcelain(System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> target, string payload, ChangeScope scope)
+        {
+            if (target == null || string.IsNullOrWhiteSpace(payload)) return;
+            using (var sr = new System.IO.StringReader(payload))
+            {
+                string line;
+                while ((line = sr.ReadLine()) != null)
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    if (line.Length < 4) continue;
+                    var statusPair = line.Substring(0, 2);
+                    var path = line.Substring(3).Trim();
+                    if (string.IsNullOrWhiteSpace(path)) continue;
+                    var statusChar = ExtractPorcelainStatus(statusPair);
+                    AddScopeStatus(target, path, scope, MapStatusChar(statusChar));
+                }
+            }
+        }
+
+        private static void AddScopeStatus(System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> target, string path, ChangeScope scope, string status)
+        {
+            if (target == null || string.IsNullOrWhiteSpace(path)) return;
+            if (!target.TryGetValue(path, out var map))
+            {
+                map = new System.Collections.Generic.Dictionary<ChangeScope, string>();
+                target[path] = map;
+            }
+            map[scope] = status;
+        }
+
+        private ChangeItem BuildChangeItem(string path, System.Collections.Generic.Dictionary<ChangeScope, string> scopes)
+        {
+            if (scopes == null) return null;
+            var item = new ChangeItem { Path = path };
+            var any = false;
+
+            if (ShouldShowScope(ChangeScope.Workspace) && scopes.TryGetValue(ChangeScope.Workspace, out var wStatus))
+            {
+                item.WStatus = wStatus;
+                any = true;
+            }
+            if (ShouldShowScope(ChangeScope.Local) && scopes.TryGetValue(ChangeScope.Local, out var lStatus))
+            {
+                item.LStatus = lStatus;
+                any = true;
+            }
+            if (ShouldShowScope(ChangeScope.Remote) && scopes.TryGetValue(ChangeScope.Remote, out var rStatus))
+            {
+                item.RStatus = rStatus;
+                any = true;
+            }
+            if (ShouldShowScope(ChangeScope.Main) && scopes.TryGetValue(ChangeScope.Main, out var mStatus))
+            {
+                item.MStatus = mStatus;
+                any = true;
+            }
+
+            return any ? item : null;
+        }
+
+        private static char ExtractPorcelainStatus(string statusPair)
+        {
+            if (string.IsNullOrWhiteSpace(statusPair)) return '?';
+            if (statusPair.Length >= 2 && statusPair[0] == '?' && statusPair[1] == '?') return 'A';
+            if (statusPair[0] != ' ' && statusPair[0] != '\t') return statusPair[0];
+            if (statusPair.Length >= 2) return statusPair[1];
+            return '?';
+        }
+
+        private static string MapStatusChar(char status)
+        {
+            switch (status)
+            {
+                case 'A':
+                    return "A";
+                case 'M':
+                    return "M";
+                case 'D':
+                    return "D";
+                case 'R':
+                    return "R";
+                case 'C':
+                    return "C";
+                case 'U':
+                    return "U";
+                case 'T':
+                    return "T";
+                default:
+                    return "?";
+            }
+        }
+
+        private static Brush StatusBrush(string status)
+        {
+            if (string.IsNullOrWhiteSpace(status)) return null;
+            switch (status)
+            {
+                case "A":
+                    return StatusAddedBrush;
+                case "M":
+                    return StatusModifiedBrush;
+                case "D":
+                    return StatusDeletedBrush;
+                default:
+                    return StatusOtherBrush;
+            }
+        }
+
+        private bool ShouldShowScope(ChangeScope scope)
+        {
+            switch (scope)
+            {
+                case ChangeScope.Workspace:
+                    return showWorkspace;
+                case ChangeScope.Local:
+                    return showLocal;
+                case ChangeScope.Remote:
+                    return showRemote;
+                case ChangeScope.Main:
+                    return showMain;
+                default:
+                    return true;
+            }
+        }
+
+        private string GetMainRef(string workDir)
+        {
+            if (!string.IsNullOrWhiteSpace(currentBaseBranch))
+            {
+                return IsLoadingLabel(currentBaseBranch) ? null : currentBaseBranch;
+            }
+            var mainRef = selectedRemote + "/main";
+            var hasMain = RunGit(workDir, $"rev-parse --verify {mainRef}");
+            if (!string.IsNullOrWhiteSpace(hasMain) && !hasMain.TrimStart().StartsWith("fatal:"))
+            {
+                return mainRef;
+            }
+            var masterRef = selectedRemote + "/master";
+            var hasMaster = RunGit(workDir, $"rev-parse --verify {masterRef}");
+            if (!string.IsNullOrWhiteSpace(hasMaster) && !hasMaster.TrimStart().StartsWith("fatal:"))
+            {
+                return masterRef;
+            }
+            return null;
+        }
+
+        private bool RefExists(string workDir, string refName)
+        {
+            if (string.IsNullOrWhiteSpace(workDir) || string.IsNullOrWhiteSpace(refName)) return false;
+            var res = RunGit(workDir, $"rev-parse --verify {refName}");
+            if (string.IsNullOrWhiteSpace(res)) return false;
+            return !res.TrimStart().StartsWith("fatal:", System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        private System.Collections.Generic.List<TreeNode> BuildTree(System.Collections.Generic.List<ChangeItem> items)
+        {
+            var roots = new System.Collections.Generic.List<TreeNode>();
+            var map = new System.Collections.Generic.Dictionary<string, TreeNode>(System.StringComparer.OrdinalIgnoreCase);
+            foreach (var it in items)
+            {
+                var parts = it.Path.Split(new[] { '/', '\\' }, System.StringSplitOptions.RemoveEmptyEntries);
+                string accum = string.Empty;
+                System.Collections.Generic.List<TreeNode> currentList = roots;
+                TreeNode parent = null;
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    var part = parts[i];
+                    accum = string.IsNullOrEmpty(accum) ? part : (accum + "/" + part);
+                    if (!map.TryGetValue(accum, out var node))
+                    {
+                        node = new TreeNode { Name = part };
+                        map[accum] = node;
+                        currentList.Add(node);
+                    }
+                    parent = node;
+                    currentList = node.Children;
+                    if (i == parts.Length - 1)
+                    {
+                        node.FullPath = it.Path;
+                        node.WStatus = it.WStatus;
+                        node.LStatus = it.LStatus;
+                        node.RStatus = it.RStatus;
+                        node.MStatus = it.MStatus;
+                        node.WBrush = StatusBrush(it.WStatus);
+                        node.LBrush = StatusBrush(it.LStatus);
+                        node.RBrush = StatusBrush(it.RStatus);
+                        node.MBrush = StatusBrush(it.MStatus);
+                        node.WToolTip = GetScopeDisplay("Workspace");
+                        node.LToolTip = GetScopeDisplay("Local");
+                        node.RToolTip = GetScopeDisplay("Remote");
+                        node.MToolTip = GetScopeDisplay("Main");
+                    }
+                }
+            }
+            CompressTree(roots);
+            foreach (var root in roots)
+            {
+                ApplyNodeVisuals(root);
+            }
+            SortTree(roots);
+            AssignDepth(roots, 0);
+            return roots;
+        }
+
+        private void AssignDepth(System.Collections.Generic.List<TreeNode> nodes, int depth)
+        {
+            if (nodes == null) return;
+            foreach (var node in nodes)
+            {
+                node.Depth = depth;
+                if (node.Children.Count > 0)
+                {
+                    AssignDepth(node.Children, depth + 1);
+                }
+            }
+        }
+
+        private void SortTree(System.Collections.Generic.List<TreeNode> nodes)
+        {
+            if (nodes == null) return;
+            nodes.Sort((a, b) =>
+            {
+                if (a == null && b == null) return 0;
+                if (a == null) return 1;
+                if (b == null) return -1;
+
+                var aIsFile = a.IsFile;
+                var bIsFile = b.IsFile;
+                if (aIsFile != bIsFile)
+                {
+                    return aIsFile ? 1 : -1; // folders first
+                }
+
+                return string.Compare(a.Name, b.Name, System.StringComparison.OrdinalIgnoreCase);
+            });
+
+            foreach (var node in nodes)
+            {
+                SortTree(node.Children);
+            }
+        }
+
+        private void CompressTree(System.Collections.Generic.List<TreeNode> roots)
+        {
+            if (roots == null) return;
+            foreach (var node in roots)
+            {
+                CompressNode(node);
+            }
+        }
+
+        private void CompressNode(TreeNode node)
+        {
+            if (node == null) return;
+            for (int i = 0; i < node.Children.Count; i++)
+            {
+                CompressNode(node.Children[i]);
+            }
+
+            while (node.FullPath == null && node.Children.Count == 1 && !node.Children[0].IsFile)
+            {
+                var child = node.Children[0];
+                node.Name = node.Name + "/" + child.Name;
+                node.Children.Clear();
+                node.Children.AddRange(child.Children);
+            }
+        }
+
+        private void ApplyNodeVisuals(TreeNode node)
+        {
+            if (node == null) return;
+            node.IsExpanded = node.Children.Count > 0;
+            node.Icon = node.IsFile ? fileIcon : folderIcon;
+            foreach (var child in node.Children)
+            {
+                ApplyNodeVisuals(child);
+            }
+        }
+
+
+        private void EnsureIcons()
+        {
+            if (folderIcon != null && fileIcon != null) return;
+            folderIcon = GetShellIcon(true);
+            fileIcon = GetShellIcon(false);
+            if (folderIcon == null) folderIcon = fileIcon;
+        }
+
+        private static ImageSource GetShellIcon(bool isFolder)
+        {
+            try
+            {
+                uint flags = SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES;
+                uint attrs = isFolder ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
+                var info = new SHFILEINFO();
+                var result = SHGetFileInfo(
+                    isFolder ? "C:\\" : "file.txt",
+                    attrs,
+                    out info,
+                    (uint)Marshal.SizeOf(typeof(SHFILEINFO)),
+                    flags);
+
+                if (result == IntPtr.Zero || info.hIcon == IntPtr.Zero) return null;
+                try
+                {
+                    var source = Imaging.CreateBitmapSourceFromHIcon(info.hIcon, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(16, 16));
+                    if (source.CanFreeze) source.Freeze();
+                    return source;
+                }
+                finally
+                {
+                    DestroyIcon(info.hIcon);
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private const uint SHGFI_ICON = 0x000000100;
+        private const uint SHGFI_SMALLICON = 0x000000001;
+        private const uint SHGFI_USEFILEATTRIBUTES = 0x000000010;
+        private const uint FILE_ATTRIBUTE_NORMAL = 0x00000080;
+        private const uint FILE_ATTRIBUTE_DIRECTORY = 0x00000010;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        private struct SHFILEINFO
+        {
+            public IntPtr hIcon;
+            public int iIcon;
+            public uint dwAttributes;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            public string szDisplayName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
+            public string szTypeName;
+        }
+
+        [DllImport("shell32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr SHGetFileInfo(string pszPath, uint dwFileAttributes, out SHFILEINFO psfi, uint cbFileInfo, uint uFlags);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool DestroyIcon(IntPtr hIcon);
+
+
+        private static void FreezeBrush(Brush brush)
+        {
+            if (brush is Freezable freezable && freezable.CanFreeze)
+            {
+                freezable.Freeze();
+            }
+        }
+
+        private void UpdateStatus(string msg)
+        {
+            this.Dispatcher.Invoke(() =>
+            {
+                if (!string.IsNullOrWhiteSpace(msg) &&
+                    msg.IndexOf("fatal: not a git repository", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    msg = "Loading...";
+                }
+                MessageBox.Show(msg, "Kev Git Changes");
+            });
+        }
+
+        private void OpenFile_Click(object sender, RoutedEventArgs e)
+        {
+            var mi = sender as MenuItem;
+            if (mi == null) return;
+            // determine which TreeView was the source and get selected node
+            string file = null;
+            try
+            {
+                TreeNode node = LocalTree.SelectedItem as TreeNode;
+
+                if (node != null) file = node.FullPath;
+            }
+            catch { }
+            if (string.IsNullOrWhiteSpace(file)) return;
+            // open the local working copy if available
+            if (!string.IsNullOrWhiteSpace(currentWorkDir))
+            {
+                var full = System.IO.Path.Combine(currentWorkDir, file.Replace('/', System.IO.Path.DirectorySeparatorChar));
+                if (System.IO.File.Exists(full))
+                {
+                    // open in Visual Studio
+                    try
+                    {
+                        var dte = Microsoft.VisualStudio.Shell.Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+                        dte.ItemOperations.OpenFile(full);
+                    }
+                    catch
+                    {
+                        System.Diagnostics.Process.Start(full);
+                    }
+                }
+            }
+        }
+
+        private void CompareWithBase_Click(object sender, RoutedEventArgs e)
+        {
+            string file = null;
+            try
+            {
+                if (LocalTree.SelectedItem is TreeNode lnode && !string.IsNullOrWhiteSpace(lnode.FullPath)) file = lnode.FullPath;
+            }
+            catch { }
+            if (string.IsNullOrWhiteSpace(file)) return;
+
+            if (string.IsNullOrWhiteSpace(currentWorkDir) || string.IsNullOrWhiteSpace(currentBaseBranch))
+            {
+                UpdateStatus("Repository or base branch unknown.");
+                return;
+            }
+
+            // launch git difftool for the file between base branch and working branch
+            var args = $"difftool {currentBaseBranch} -- \"{file}\"";
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo("git", args)
+                {
+                    UseShellExecute = true,
+                    WorkingDirectory = currentWorkDir
+                };
+                System.Diagnostics.Process.Start(psi);
+            }
+            catch (System.Exception ex)
+            {
+                UpdateStatus("Unable to launch difftool: " + ex.Message);
+            }
+        }
+
+        private void CompareSelected_Click(object sender, RoutedEventArgs e)
+        {
+            var file = GetSelectedFile();
+            if (string.IsNullOrWhiteSpace(file)) return;
+            var left = GetScopeKeyFromCombo(CompareFromCombo);
+            var right = GetScopeKeyFromCombo(CompareToCombo);
+            CompareScopes(file, left, right);
+        }
+
+        private void CompareWithMain_Click(object sender, RoutedEventArgs e)
+        {
+            var file = GetSelectedFile();
+            if (string.IsNullOrWhiteSpace(file)) return;
+            CompareScopes(file, "Workspace", "Main");
+        }
+
+        private void CompareWithRemote_Click(object sender, RoutedEventArgs e)
+        {
+            var file = GetSelectedFile();
+            if (string.IsNullOrWhiteSpace(file)) return;
+            CompareScopes(file, "Workspace", "Remote");
+        }
+
+        private void CompareWithLocal_Click(object sender, RoutedEventArgs e)
+        {
+            var file = GetSelectedFile();
+            if (string.IsNullOrWhiteSpace(file)) return;
+            CompareScopes(file, "Workspace", "Local");
+        }
+
+        private void TreeView_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            var dep = e.OriginalSource as DependencyObject;
+            var item = FindAncestor<TreeViewItem>(dep);
+            if (item != null)
+            {
+                item.IsSelected = true;
+                item.Focus();
+            }
+        }
+
+        private static T FindAncestor<T>(DependencyObject current) where T : DependencyObject
+        {
+            while (current != null)
+            {
+                if (current is T match) return match;
+                current = VisualTreeHelper.GetParent(current);
+            }
+            return null;
+        }
+
+        private string GetSelectedFile()
+        {
+            try
+            {
+                if (LocalTree.SelectedItem is TreeNode node && !string.IsNullOrWhiteSpace(node.FullPath))
+                {
+                    return node.FullPath;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private void InitializeCompareOptions()
+        {
+            try
+            {
+                UpdateCompareCombos("Workspace", "Local");
+            }
+            catch { }
+        }
+
+        private void CompareSelection_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            UpdateCompareMenuHeader();
+        }
+
+        private void FilterChanged(object sender, RoutedEventArgs e)
+        {
+            UpdateListViews(scopeMap);
+        }
+
+        private void CompareScopes(string file, string leftScope, string rightScope)
+        {
+            if (string.IsNullOrWhiteSpace(currentWorkDir) || string.IsNullOrWhiteSpace(file)) return;
+            var left = ScopeToRef(leftScope);
+            var right = ScopeToRef(rightScope);
+
+            if (!HasGitDifftoolConfigured(currentWorkDir))
+            {
+                LaunchVsCompare(file, leftScope, rightScope);
+                return;
+            }
+
+            try
+            {
+                var args = BuildDiffArgs(left, right, file);
+                if (string.IsNullOrWhiteSpace(args)) return;
+                var psi = new System.Diagnostics.ProcessStartInfo("git", args)
+                {
+                    UseShellExecute = true,
+                    WorkingDirectory = currentWorkDir
+                };
+                System.Diagnostics.Process.Start(psi);
+            }
+            catch (System.Exception ex)
+            {
+                UpdateStatus("Unable to launch difftool: " + ex.Message);
+            }
+        }
+
+        private string ScopeToRef(string scope)
+        {
+            switch ((scope ?? string.Empty).Trim())
+            {
+                case "Workspace":
+                    return null;
+                case "Local":
+                    return "HEAD";
+                case "Remote":
+                    return selectedRemote + "/" + currentBranch;
+                case "Main":
+                    return IsLoadingLabel(currentBaseBranch) ? null : currentBaseBranch;
+                default:
+                    return null;
+            }
+        }
+
+        private static string BuildDiffArgs(string leftRef, string rightRef, string file)
+        {
+            if (string.IsNullOrWhiteSpace(file)) return null;
+            if (string.IsNullOrWhiteSpace(leftRef) && string.IsNullOrWhiteSpace(rightRef))
+            {
+                return null;
+            }
+            if (string.IsNullOrWhiteSpace(leftRef))
+            {
+                return $"difftool --no-prompt {rightRef} -- \"{file}\"";
+            }
+            if (string.IsNullOrWhiteSpace(rightRef))
+            {
+                return $"difftool --no-prompt {leftRef} -- \"{file}\"";
+            }
+            return $"difftool --no-prompt {leftRef} {rightRef} -- \"{file}\"";
+        }
+
+        private bool HasGitDifftoolConfigured(string workDir)
+        {
+            if (string.IsNullOrWhiteSpace(workDir)) return false;
+            var tool = RunGit(workDir, "config --get diff.tool");
+            if (string.IsNullOrWhiteSpace(tool)) return false;
+            var trimmed = tool.Trim();
+            if (trimmed.StartsWith("fatal:", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("error:", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            return true;
+        }
+
+        private struct CompareFile
+        {
+            public string Path;
+            public string Label;
+        }
+
+        private void LaunchVsCompare(string file, string leftScope, string rightScope)
+        {
+            try
+            {
+                var left = GetFileForScope(currentWorkDir, leftScope, file);
+                var right = GetFileForScope(currentWorkDir, rightScope, file);
+
+                var diffService = Package.GetGlobalService(typeof(SVsDifferenceService));
+                if (diffService == null)
+                {
+                    UpdateStatus("Visual Studio compare service not available.");
+                    return;
+                }
+
+                var caption = $"{left.Label} vs {right.Label}";
+                try
+                {
+                    dynamic svc = diffService;
+                    svc.OpenComparisonWindow2(left.Path, right.Path, left.Label, right.Label, caption, null, null, 0);
+                    return;
+                }
+                catch { }
+
+                try
+                {
+                    dynamic svc = diffService;
+                    svc.OpenComparisonWindow(left.Path, right.Path, left.Label, right.Label, caption, null, null, 0);
+                }
+                catch
+                {
+                    UpdateStatus("Unable to open Visual Studio compare window.");
+                }
+            }
+            catch (Exception ex)
+            {
+                UpdateStatus("Unable to launch Visual Studio compare: " + ex.Message);
+            }
+        }
+
+        private CompareFile GetFileForScope(string workDir, string scopeKey, string relPath)
+        {
+            var label = GetScopeDisplay(scopeKey);
+            if (string.IsNullOrWhiteSpace(scopeKey) || string.Equals(scopeKey, "Workspace", StringComparison.OrdinalIgnoreCase))
+            {
+                var full = System.IO.Path.Combine(workDir, relPath.Replace('/', System.IO.Path.DirectorySeparatorChar));
+                if (System.IO.File.Exists(full))
+                {
+                    return new CompareFile { Path = full, Label = label };
+                }
+                var tempMissing = WriteTempFile(relPath, "workspace", string.Empty);
+                return new CompareFile { Path = tempMissing, Label = label + " (missing)" };
+            }
+
+            var refName = ScopeToRef(scopeKey);
+            if (string.IsNullOrWhiteSpace(refName))
+            {
+                var tempEmpty = WriteTempFile(relPath, "unknown", string.Empty);
+                return new CompareFile { Path = tempEmpty, Label = label + " (missing)" };
+            }
+
+            var content = GetFileContentAtRef(workDir, refName, relPath, out bool ok);
+            var tempPath = WriteTempFile(relPath, refName, content ?? string.Empty);
+            return new CompareFile { Path = tempPath, Label = ok ? label : (label + " (missing)") };
+        }
+
+        private string GetFileContentAtRef(string workDir, string refName, string relPath, out bool ok)
+        {
+            ok = false;
+            if (string.IsNullOrWhiteSpace(workDir) || string.IsNullOrWhiteSpace(refName) || string.IsNullOrWhiteSpace(relPath)) return null;
+            var gitPath = relPath.Replace('\\', '/');
+            var payload = RunGit(workDir, $"show {refName}:\"{gitPath}\"");
+            if (string.IsNullOrWhiteSpace(payload)) return null;
+            var trimmed = payload.TrimStart();
+            if (trimmed.StartsWith("fatal:", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("error:", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+            ok = true;
+            return payload;
+        }
+
+        private string WriteTempFile(string relPath, string refName, string content)
+        {
+            var tempRoot = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "KevGitChangesDiff");
+            if (!System.IO.Directory.Exists(tempRoot)) System.IO.Directory.CreateDirectory(tempRoot);
+
+            var fileName = System.IO.Path.GetFileName(relPath);
+            if (string.IsNullOrWhiteSpace(fileName)) fileName = "file";
+            var ext = System.IO.Path.GetExtension(fileName);
+            var baseName = System.IO.Path.GetFileNameWithoutExtension(fileName);
+            var key = $"{refName}:{relPath}".ToLowerInvariant();
+            var hash = ComputeSha1(key);
+            var safeBase = SanitizeFileName(baseName);
+            var tempFile = System.IO.Path.Combine(tempRoot, $"{safeBase}.{hash}{ext}");
+            System.IO.File.WriteAllText(tempFile, content ?? string.Empty);
+            return tempFile;
+        }
+
+        private string RunGit(string workingDirectory, string arguments)
+        {
+            try
+            {
+                WriteOutput($"git {arguments}");
+                var psi = new System.Diagnostics.ProcessStartInfo("git", arguments)
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WorkingDirectory = workingDirectory
+                };
+
+                using (var p = System.Diagnostics.Process.Start(psi))
+                {
+                    var outStr = p.StandardOutput.ReadToEnd();
+                    var errStr = p.StandardError.ReadToEnd();
+                    p.WaitForExit();
+                    if (p.ExitCode != 0 && string.IsNullOrWhiteSpace(outStr))
+                    {
+                        return errStr;
+                    }
+                    return outStr;
+                }
+            }
+            catch (System.Exception ex)
+            {
+                return ex.Message;
+            }
+        }
+
+        private void WriteOutput(string line)
+        {
+            if (string.IsNullOrWhiteSpace(line)) return;
+            ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                try
+                {
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    var outputWindow = Package.GetGlobalService(typeof(SVsOutputWindow)) as IVsOutputWindow;
+                    if (outputWindow == null) return;
+
+                    if (outputPane == null)
+                    {
+                        var paneGuid = OutputPaneGuid;
+                        outputWindow.CreatePane(ref paneGuid, "Kev Git Changes", 1, 1);
+                        outputWindow.GetPane(ref paneGuid, out outputPane);
+                    }
+
+                    outputPane?.OutputStringThreadSafe(line + Environment.NewLine);
+                }
+                catch
+                {
+                    // ignore logging failures
+                }
+            });
+        }
+
+        private string GetScopeKeyFromCombo(ComboBox combo)
+        {
+            if (combo == null) return null;
+            if (combo.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+            {
+                return tag;
+            }
+            if (combo.SelectedItem is string s)
+            {
+                return s;
+            }
+            return null;
+        }
+
+        private string GetScopeDisplay(string scopeKey)
+        {
+            switch ((scopeKey ?? string.Empty).Trim())
+            {
+                case "Workspace":
+                    return "Workspace";
+                case "Local":
+                    return string.IsNullOrWhiteSpace(currentBranch) ? "Local" : $"{currentBranch} (local)";
+                case "Remote":
+                    return string.IsNullOrWhiteSpace(currentBranch) ? "Remote" : $"{selectedRemote}/{currentBranch} (remote)";
+                case "Main":
+                    if (IsLoadingLabel(currentBaseBranch) || IsGitRepoError(currentBaseBranch)) return $"{LoadingLabel} (base)";
+                    return string.IsNullOrWhiteSpace(currentBaseBranch) ? "Base" : $"{currentBaseBranch} (base)";
+                default:
+                    return scopeKey;
+            }
+        }
+
+        private void UpdateScopeLabels()
+        {
+            var localLabel = GetScopeDisplay("Local");
+            var remoteLabel = GetScopeDisplay("Remote");
+            var mainLabel = GetScopeDisplay("Main");
+
+            this.Dispatcher.Invoke(() =>
+            {
+                if (ShowLocal != null) ShowLocal.Content = localLabel;
+                if (ShowRemote != null) ShowRemote.Content = remoteLabel;
+                if (ShowMain != null) ShowMain.Content = mainLabel;
+
+                UpdateCompareCombos("Workspace", "Local");
+                UpdateCompareMenuHeader();
+
+                if (CompareWithLocalMenu != null)
+                {
+                    CompareWithLocalMenu.Header = $"Compare vs {localLabel}";
+                }
+                if (CompareWithMainMenu != null)
+                {
+                    CompareWithMainMenu.Header = $"Compare vs {mainLabel}";
+                }
+                if (CompareWithRemoteMenu != null)
+                {
+                    CompareWithRemoteMenu.Header = $"Compare vs {remoteLabel}";
+                }
+            });
+        }
+
+        private void UpdateCompareCombos(string defaultFrom, string defaultTo)
+        {
+            var fromKey = GetScopeKeyFromCombo(CompareFromCombo) ?? defaultFrom;
+            var toKey = GetScopeKeyFromCombo(CompareToCombo) ?? defaultTo;
+
+            var items = BuildCompareItems();
+            var items2 = BuildCompareItems();
+            CompareFromCombo.ItemsSource = items;
+            CompareToCombo.ItemsSource = items2;
+            SelectComboByTag(CompareFromCombo, fromKey);
+            SelectComboByTag(CompareToCombo, toKey);
+        }
+
+        private System.Collections.Generic.List<ComboBoxItem> BuildCompareItems()
+        {
+            return new System.Collections.Generic.List<ComboBoxItem>
+            {
+                new ComboBoxItem { Tag = "Workspace", Content = GetScopeDisplay("Workspace") },
+                new ComboBoxItem { Tag = "Local", Content = GetScopeDisplay("Local") },
+                new ComboBoxItem { Tag = "Remote", Content = GetScopeDisplay("Remote") },
+                new ComboBoxItem { Tag = "Main", Content = GetScopeDisplay("Main") }
+            };
+        }
+
+        private void SelectComboByTag(ComboBox combo, string tag)
+        {
+            if (combo == null || string.IsNullOrWhiteSpace(tag)) return;
+            foreach (var obj in combo.Items)
+            {
+                if (obj is ComboBoxItem item && item.Tag is string t &&
+                    string.Equals(t, tag, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    combo.SelectedItem = item;
+                    return;
+                }
+            }
+        }
+
+        private void UpdateCompareMenuHeader()
+        {
+            if (CompareSelectionMenu == null) return;
+            var fromKey = GetScopeKeyFromCombo(CompareFromCombo);
+            var toKey = GetScopeKeyFromCombo(CompareToCombo);
+            var fromLabel = GetScopeDisplayForCompareSelection(fromKey) ?? "A";
+            var toLabel = GetScopeDisplayForCompareSelection(toKey) ?? "B";
+            CompareSelectionMenu.Header = $"Compare {fromLabel} to {toLabel}";
+        }
+
+        private string GetScopeDisplayForCompareSelection(string scopeKey)
+        {
+            switch ((scopeKey ?? string.Empty).Trim())
+            {
+                case "Local":
+                    return string.IsNullOrWhiteSpace(currentBranch) ? "Local" : currentBranch;
+                default:
+                    return GetScopeDisplay(scopeKey);
+            }
+        }
+
+        private static bool IsGitRepoError(string payload)
+        {
+            return !string.IsNullOrWhiteSpace(payload) &&
+                payload.IndexOf("fatal: not a git repository", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool IsLoadingLabel(string value)
+        {
+            return string.Equals(value, LoadingLabel, StringComparison.OrdinalIgnoreCase);
         }
     }
 }
+
+

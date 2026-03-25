@@ -58,6 +58,8 @@
       <DependentUpon>ToolWindow1Control.xaml</DependentUpon>
     </Compile>
     <Compile Include="ToolWindow1Package.cs" />
+    <Compile Include="TreeNode.cs" />
+    <Compile Include="TreeViewIndentToMarginConverter.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Key.snk" />

@@ -4,7 +4,7 @@
     <Platform Name="arm64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="KevGitChanges/KevGitChanges.csproj">
+  <Project Path="KevGitChanges/KevGitChanges.csproj" Id="024f139a-f58c-43cd-b6de-1c0fdf18ba47">
     <Platform Solution="*|arm64" Project="arm64" />
     <Platform Solution="*|x86" Project="x86" />
   </Project>
