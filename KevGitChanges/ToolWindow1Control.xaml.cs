@@ -20,6 +20,7 @@ namespace KevGitChanges
     public partial class ToolWindow1Control : UserControl
     {
         private string currentWorkDir;
+        private string currentRepoRoot;
         private string currentBaseBranch;
         private string currentBranch;
         private string currentMainRef;
@@ -90,6 +91,8 @@ namespace KevGitChanges
             {
                 currentWorkDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
             }
+
+            currentRepoRoot = ResolveRepoRoot(currentWorkDir);
 
             EnsureOutputPane();
             EnsureIcons();
@@ -321,6 +324,7 @@ namespace KevGitChanges
 
                     // show chosen base branch in UI
                     currentWorkDir = workDir;
+                    currentRepoRoot = ResolveRepoRoot(workDir);
                     currentBaseBranch = baseBranch;
 
                     // If BaseBranchCombo has selection prefer that as the base branch
@@ -1294,7 +1298,7 @@ namespace KevGitChanges
             // open the local working copy if available
             if (!string.IsNullOrWhiteSpace(currentWorkDir))
             {
-                var full = System.IO.Path.Combine(currentWorkDir, file.Replace('/', System.IO.Path.DirectorySeparatorChar));
+                var full = ResolveWorkspacePath(file);
                 if (System.IO.File.Exists(full))
                 {
                     // open in Visual Studio
@@ -1638,7 +1642,7 @@ namespace KevGitChanges
             var label = GetScopeDisplay(scopeKey);
             if (string.IsNullOrWhiteSpace(scopeKey) || string.Equals(scopeKey, "Workspace", StringComparison.OrdinalIgnoreCase))
             {
-                var full = System.IO.Path.Combine(workDir, relPath.Replace('/', System.IO.Path.DirectorySeparatorChar));
+                var full = ResolveWorkspacePath(relPath);
                 if (System.IO.File.Exists(full))
                 {
                     return new CompareFile { Path = full, Label = label };
@@ -1715,6 +1719,50 @@ namespace KevGitChanges
                 WriteOutput("Compare diagnostics: git difftool failed: " + ex.Message);
                 return false;
             }
+        }
+
+        private string ResolveRepoRoot(string workDir)
+        {
+            if (string.IsNullOrWhiteSpace(workDir)) return null;
+            try
+            {
+                var res = RunGit(workDir, "rev-parse --show-toplevel");
+                if (!string.IsNullOrWhiteSpace(res))
+                {
+                    var trimmed = res.Trim();
+                    if (!trimmed.StartsWith("fatal:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return trimmed;
+                    }
+                }
+            }
+            catch
+            {
+                // fall through to .git walk
+            }
+
+            try
+            {
+                var dir = new System.IO.DirectoryInfo(workDir);
+                while (dir != null && !System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, ".git")))
+                {
+                    dir = dir.Parent;
+                }
+                return dir?.FullName ?? workDir;
+            }
+            catch
+            {
+                return workDir;
+            }
+        }
+
+        private string ResolveWorkspacePath(string relPath)
+        {
+            if (string.IsNullOrWhiteSpace(relPath)) return relPath;
+            if (System.IO.Path.IsPathRooted(relPath)) return relPath;
+            var root = !string.IsNullOrWhiteSpace(currentRepoRoot) ? currentRepoRoot : currentWorkDir;
+            if (string.IsNullOrWhiteSpace(root)) return relPath;
+            return System.IO.Path.Combine(root, relPath.Replace('/', System.IO.Path.DirectorySeparatorChar));
         }
 
 
