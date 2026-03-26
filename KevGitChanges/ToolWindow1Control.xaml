@@ -430,12 +430,21 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
             <!-- Local changes List -->
-            <StackPanel Grid.Column="0" Margin="4">
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Stretch">
+            <Grid Grid.Column="0" Margin="4">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Stretch" Grid.Row="0">
                     <TextBlock FontWeight="Bold" VerticalAlignment="Center">Changes</TextBlock>
                     <TextBlock Name="LocalCount" Margin="8,0,0,0" VerticalAlignment="Center" Foreground="Gray">(0)</TextBlock>
                 </StackPanel>
-                <TreeView Name="LocalTree" Margin="0,6,0,0" PreviewMouseRightButtonDown="TreeView_PreviewMouseRightButtonDown" Grid.IsSharedSizeScope="True">
+                <TreeView Name="LocalTree" Grid.Row="1" Margin="0,6,0,0" PreviewMouseRightButtonDown="TreeView_PreviewMouseRightButtonDown"
+                          Grid.IsSharedSizeScope="True"
+                          ScrollViewer.VerticalScrollBarVisibility="Auto"
+                          ScrollViewer.CanContentScroll="True"
+                          VirtualizingStackPanel.IsVirtualizing="True"
+                          VirtualizingStackPanel.VirtualizationMode="Recycling">
                     <TreeView.ItemTemplate>
                         <HierarchicalDataTemplate ItemsSource="{Binding Children}">
                             <Grid>
@@ -460,7 +469,7 @@
                         </ContextMenu>
                     </TreeView.ContextMenu>
                 </TreeView>
-            </StackPanel>
+            </Grid>
         </Grid>
     </Grid>
 </UserControl>

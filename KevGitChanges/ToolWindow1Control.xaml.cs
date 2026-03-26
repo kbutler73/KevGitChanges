@@ -1159,22 +1159,31 @@ namespace KevGitChanges
             var left = ScopeToRef(leftScope);
             var right = ScopeToRef(rightScope);
 
+            if (IsMockCompareEnabled())
+            {
+                WriteCompareDiagnostics(file, leftScope, rightScope, left, right, "Mock compare enabled");
+                if (!TryLaunchGitDifftool(file, left, right))
+                {
+                    UpdateStatus("Unable to launch git difftool.");
+                }
+                return;
+            }
+
             if (!HasGitDifftoolConfigured(currentWorkDir))
             {
-                LaunchVsCompare(file, leftScope, rightScope);
+                if (!LaunchVsCompare(file, leftScope, rightScope))
+                {
+                    UpdateStatus("Unable to open compare window.");
+                }
                 return;
             }
 
             try
             {
-                var args = BuildDiffArgs(left, right, file);
-                if (string.IsNullOrWhiteSpace(args)) return;
-                var psi = new System.Diagnostics.ProcessStartInfo("git", args)
+                if (!TryLaunchGitDifftool(file, left, right))
                 {
-                    UseShellExecute = true,
-                    WorkingDirectory = currentWorkDir
-                };
-                System.Diagnostics.Process.Start(psi);
+                    UpdateStatus("Unable to launch git difftool.");
+                }
             }
             catch (System.Exception ex)
             {
@@ -1208,13 +1217,13 @@ namespace KevGitChanges
             }
             if (string.IsNullOrWhiteSpace(leftRef))
             {
-                return $"difftool --no-prompt {rightRef} -- \"{file}\"";
+                return $"difftool -y {rightRef} -- \"{file}\"";
             }
             if (string.IsNullOrWhiteSpace(rightRef))
             {
-                return $"difftool --no-prompt {leftRef} -- \"{file}\"";
+                return $"difftool -y {leftRef} -- \"{file}\"";
             }
-            return $"difftool --no-prompt {leftRef} {rightRef} -- \"{file}\"";
+            return $"difftool -y {leftRef} {rightRef} -- \"{file}\"";
         }
 
         private bool HasGitDifftoolConfigured(string workDir)
@@ -1231,13 +1240,78 @@ namespace KevGitChanges
             return true;
         }
 
+        private bool IsMockCompareEnabled()
+        {
+            try
+            {
+                var env = Environment.GetEnvironmentVariable("KEVGITCHANGES_MOCK_COMPARE");
+                if (!string.IsNullOrWhiteSpace(env) && IsTruthy(env)) return true;
+            }
+            catch { }
+
+            try
+            {
+                var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                var dir = System.IO.Path.Combine(appData, "KevGitChanges");
+                var file = System.IO.Path.Combine(dir, "compare.mock");
+                if (!System.IO.File.Exists(file)) return false;
+                var txt = System.IO.File.ReadAllText(file);
+                return string.IsNullOrWhiteSpace(txt) || IsTruthy(txt);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsTruthy(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return false;
+            var v = value.Trim();
+            return v.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+                   v.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                   v.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+                   v.Equals("on", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void WriteCompareDiagnostics(string file, string leftScope, string rightScope, string leftRef, string rightRef, string reason)
+        {
+            try
+            {
+                var tool = RunGit(currentWorkDir, "config --get diff.tool");
+                var toolCmd = string.Empty;
+                if (!string.IsNullOrWhiteSpace(tool))
+                {
+                    var t = tool.Trim();
+                    toolCmd = RunGit(currentWorkDir, $"config --get difftool.{t}.cmd");
+                    if (string.IsNullOrWhiteSpace(toolCmd))
+                    {
+                        toolCmd = RunGit(currentWorkDir, $"config --get difftool.{t}.path");
+                    }
+                }
+
+                WriteOutput("Compare diagnostics:");
+                WriteOutput($"  Reason: {reason}");
+                WriteOutput($"  File: {file}");
+                WriteOutput($"  LeftScope: {leftScope}  LeftRef: {leftRef}");
+                WriteOutput($"  RightScope: {rightScope}  RightRef: {rightRef}");
+                WriteOutput($"  WorkDir: {currentWorkDir}");
+                if (!string.IsNullOrWhiteSpace(tool)) WriteOutput($"  diff.tool: {tool.Trim()}");
+                if (!string.IsNullOrWhiteSpace(toolCmd)) WriteOutput($"  difftool cmd/path: {toolCmd.Trim()}");
+            }
+            catch
+            {
+                // ignore diagnostics failures
+            }
+        }
+
         private struct CompareFile
         {
             public string Path;
             public string Label;
         }
 
-        private void LaunchVsCompare(string file, string leftScope, string rightScope)
+        private bool LaunchVsCompare(string file, string leftScope, string rightScope)
         {
             try
             {
@@ -1248,7 +1322,8 @@ namespace KevGitChanges
                 if (diffService == null)
                 {
                     UpdateStatus("Visual Studio compare service not available.");
-                    return;
+                    WriteOutput("Compare diagnostics: SVsDifferenceService unavailable.");
+                    return false;
                 }
 
                 var caption = $"{left.Label} vs {right.Label}";
@@ -1256,23 +1331,31 @@ namespace KevGitChanges
                 {
                     dynamic svc = diffService;
                     svc.OpenComparisonWindow2(left.Path, right.Path, left.Label, right.Label, caption, null, null, 0);
-                    return;
+                    return true;
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    WriteOutput("Compare diagnostics: OpenComparisonWindow2 failed: " + ex.Message);
+                }
 
                 try
                 {
                     dynamic svc = diffService;
                     svc.OpenComparisonWindow(left.Path, right.Path, left.Label, right.Label, caption, null, null, 0);
+                    return true;
                 }
-                catch
+                catch (Exception ex)
                 {
+                    WriteOutput("Compare diagnostics: OpenComparisonWindow failed: " + ex.Message);
                     UpdateStatus("Unable to open Visual Studio compare window.");
+                    return false;
                 }
             }
             catch (Exception ex)
             {
                 UpdateStatus("Unable to launch Visual Studio compare: " + ex.Message);
+                WriteOutput("Compare diagnostics: VS compare launch exception: " + ex.Message);
+                return false;
             }
         }
 
@@ -1335,6 +1418,31 @@ namespace KevGitChanges
             System.IO.File.WriteAllText(tempFile, content ?? string.Empty);
             return tempFile;
         }
+
+        private bool TryLaunchGitDifftool(string file, string leftRef, string rightRef)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(currentWorkDir)) return false;
+                var args = BuildDiffArgs(leftRef, rightRef, file);
+                if (string.IsNullOrWhiteSpace(args)) return false;
+                WriteOutput("Compare diagnostics: launching git difftool.");
+                WriteOutput($"  args: {args}");
+                var psi = new System.Diagnostics.ProcessStartInfo("git", args)
+                {
+                    UseShellExecute = true,
+                    WorkingDirectory = currentWorkDir
+                };
+                System.Diagnostics.Process.Start(psi);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                WriteOutput("Compare diagnostics: git difftool failed: " + ex.Message);
+                return false;
+            }
+        }
+
 
         private string RunGit(string workingDirectory, string arguments)
         {
