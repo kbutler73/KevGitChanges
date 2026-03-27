@@ -352,11 +352,11 @@ namespace KevGitChanges
                         if (originExists)
                         {
                             // local commits not yet pushed
-                            return RunGit(workDir, $"diff --name-status {originBranch}..{currentBranch}");
+                            return RunGit(workDir, $"diff --name-status {originBranch}...{currentBranch}");
                         }
                         if (baseExists)
                         {
-                            return RunGit(workDir, $"diff --name-status {currentBaseBranch}..{currentBranch}");
+                            return RunGit(workDir, $"diff --name-status {currentBaseBranch}...{currentBranch}");
                         }
                         return string.Empty;
                     });
@@ -365,7 +365,7 @@ namespace KevGitChanges
                         if (baseExists && originExists)
                         {
                             // pushed commits not yet merged to the release branch
-                            return RunGit(workDir, $"diff --name-status {currentBaseBranch}..{originBranch}");
+                            return RunGit(workDir, $"diff --name-status {currentBaseBranch}...{originBranch}");
                         }
                         return string.Empty;
                     });
@@ -374,7 +374,7 @@ namespace KevGitChanges
                         currentMainRef = currentBaseBranch;
                         if (string.IsNullOrWhiteSpace(currentMainRef) || !baseExists) return string.Empty;
                         // overall delta vs the selected release branch
-                        return RunGit(workDir, $"diff --name-status {currentBaseBranch}..{currentBranch}");
+                        return RunGit(workDir, $"diff --name-status {currentBaseBranch}...{currentBranch}");
                     });
 
                     Task.WaitAll(workspaceTask, localTask, remoteTask, mainTask);
@@ -668,7 +668,6 @@ namespace KevGitChanges
             }
         }
 
-
         private class ChangeItem
         {
             public string Path { get; set; }
@@ -833,18 +832,25 @@ namespace KevGitChanges
             {
                 case 'A':
                     return "A";
+
                 case 'M':
                     return "M";
+
                 case 'D':
                     return "D";
+
                 case 'R':
                     return "R";
+
                 case 'C':
                     return "C";
+
                 case 'U':
                     return "U";
+
                 case 'T':
                     return "T";
+
                 default:
                     return "?";
             }
@@ -857,10 +863,13 @@ namespace KevGitChanges
             {
                 case "A":
                     return StatusAddedBrush;
+
                 case "M":
                     return StatusModifiedBrush;
+
                 case "D":
                     return StatusDeletedBrush;
+
                 default:
                     return StatusOtherBrush;
             }
@@ -872,12 +881,16 @@ namespace KevGitChanges
             {
                 case ChangeScope.Workspace:
                     return showWorkspace;
+
                 case ChangeScope.Local:
                     return showLocal;
+
                 case ChangeScope.Remote:
                     return showRemote;
+
                 case ChangeScope.Main:
                     return showMain;
+
                 default:
                     return true;
             }
@@ -1042,7 +1055,6 @@ namespace KevGitChanges
                 ApplyNodeVisuals(child);
             }
         }
-
 
         private void EnsureIcons()
         {
@@ -1244,8 +1256,10 @@ namespace KevGitChanges
             public IntPtr hIcon;
             public int iIcon;
             public uint dwAttributes;
+
             [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
             public string szDisplayName;
+
             [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
             public string szTypeName;
         }
@@ -1258,7 +1272,6 @@ namespace KevGitChanges
 
         [DllImport("gdi32.dll", SetLastError = true)]
         private static extern bool DeleteObject(IntPtr hObject);
-
 
         private static void FreezeBrush(Brush brush)
         {
@@ -1361,21 +1374,24 @@ namespace KevGitChanges
         {
             var file = GetSelectedFile();
             if (string.IsNullOrWhiteSpace(file)) return;
-            CompareScopes(file, "Workspace", "Main");
+            // Use base...remote style (base vs remote) for PR-like compare
+            CompareScopes(file, "Main", "Remote");
         }
 
         private void CompareWithRemote_Click(object sender, RoutedEventArgs e)
         {
             var file = GetSelectedFile();
             if (string.IsNullOrWhiteSpace(file)) return;
-            CompareScopes(file, "Workspace", "Remote");
+            // Use remote...local ordering for PR-like compare
+            CompareScopes(file, "Remote", "Local");
         }
 
         private void CompareWithLocal_Click(object sender, RoutedEventArgs e)
         {
             var file = GetSelectedFile();
             if (string.IsNullOrWhiteSpace(file)) return;
-            CompareScopes(file, "Workspace", "Local");
+            // Use local...workspace ordering for PR-like compare
+            CompareScopes(file, "Local", "Workspace");
         }
 
         private void TreeView_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
@@ -1475,12 +1491,16 @@ namespace KevGitChanges
             {
                 case "Workspace":
                     return null;
+
                 case "Local":
                     return "HEAD";
+
                 case "Remote":
                     return selectedRemote + "/" + currentBranch;
+
                 case "Main":
                     return IsLoadingLabel(currentBaseBranch) ? null : currentBaseBranch;
+
                 default:
                     return null;
             }
@@ -1501,7 +1521,8 @@ namespace KevGitChanges
             {
                 return $"difftool -y {leftRef} -- \"{file}\"";
             }
-            return $"difftool -y {leftRef} {rightRef} -- \"{file}\"";
+            // Use three-dot symmetric/PR-style compare between refs
+            return $"difftool -y {leftRef}...{rightRef} -- \"{file}\"";
         }
 
         private bool HasGitDifftoolConfigured(string workDir)
@@ -1765,7 +1786,6 @@ namespace KevGitChanges
             return System.IO.Path.Combine(root, relPath.Replace('/', System.IO.Path.DirectorySeparatorChar));
         }
 
-
         private string RunGit(string workingDirectory, string arguments)
         {
             try
@@ -1907,13 +1927,17 @@ namespace KevGitChanges
             {
                 case "Workspace":
                     return "Workspace";
+
                 case "Local":
                     return string.IsNullOrWhiteSpace(currentBranch) ? "Local" : $"{currentBranch} (local)";
+
                 case "Remote":
                     return string.IsNullOrWhiteSpace(currentBranch) ? "Remote" : $"{selectedRemote}/{currentBranch} (remote)";
+
                 case "Main":
                     if (IsLoadingLabel(currentBaseBranch) || IsGitRepoError(currentBaseBranch)) return $"{LoadingLabel} (base)";
                     return string.IsNullOrWhiteSpace(currentBaseBranch) ? "Base" : $"{currentBaseBranch} (base)";
+
                 default:
                     return scopeKey;
             }
@@ -2003,6 +2027,7 @@ namespace KevGitChanges
             {
                 case "Local":
                     return string.IsNullOrWhiteSpace(currentBranch) ? "Local" : currentBranch;
+
                 default:
                     return GetScopeDisplay(scopeKey);
             }
@@ -2028,5 +2053,3 @@ namespace KevGitChanges
         }
     }
 }
-
-
