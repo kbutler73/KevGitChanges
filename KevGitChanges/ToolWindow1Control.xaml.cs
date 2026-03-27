@@ -1374,24 +1374,21 @@ namespace KevGitChanges
         {
             var file = GetSelectedFile();
             if (string.IsNullOrWhiteSpace(file)) return;
-            // Use base...remote style (base vs remote) for PR-like compare
-            CompareScopes(file, "Main", "Remote");
+            CompareScopes(file, "Workspace", "Main");
         }
 
         private void CompareWithRemote_Click(object sender, RoutedEventArgs e)
         {
             var file = GetSelectedFile();
             if (string.IsNullOrWhiteSpace(file)) return;
-            // Use remote...local ordering for PR-like compare
-            CompareScopes(file, "Remote", "Local");
+            CompareScopes(file, "Workspace", "Remote");
         }
 
         private void CompareWithLocal_Click(object sender, RoutedEventArgs e)
         {
             var file = GetSelectedFile();
             if (string.IsNullOrWhiteSpace(file)) return;
-            // Use local...workspace ordering for PR-like compare
-            CompareScopes(file, "Local", "Workspace");
+            CompareScopes(file, "Workspace", "Local");
         }
 
         private void TreeView_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
@@ -1521,8 +1518,7 @@ namespace KevGitChanges
             {
                 return $"difftool -y {leftRef} -- \"{file}\"";
             }
-            // Use three-dot symmetric/PR-style compare between refs
-            return $"difftool -y {leftRef}...{rightRef} -- \"{file}\"";
+            return $"difftool -y {leftRef} {rightRef} -- \"{file}\"";
         }
 
         private bool HasGitDifftoolConfigured(string workDir)
