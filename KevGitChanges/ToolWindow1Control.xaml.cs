@@ -9,6 +9,8 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.Imaging;
+using Microsoft.VisualStudio.Imaging.Interop;
 
 namespace KevGitChanges
 {
@@ -18,6 +20,7 @@ namespace KevGitChanges
     public partial class ToolWindow1Control : UserControl
     {
         private string currentWorkDir;
+        private string currentRepoRoot;
         private string currentBaseBranch;
         private string currentBranch;
         private string currentMainRef;
@@ -32,6 +35,10 @@ namespace KevGitChanges
         private bool showMain = true;
         private IVsOutputWindowPane outputPane;
         private static readonly Guid OutputPaneGuid = new Guid("1C6450F7-14B0-4D9D-8C41-9B2D95C0F4D2");
+        private bool ignoreCheckoutSelection;
+        private bool iconDiagnosticsLogged;
+        private int iconDiagnosticsCount;
+        private string lastIconDiagnostics;
 
         private readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> scopeMap =
             new System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>>(System.StringComparer.OrdinalIgnoreCase);
@@ -85,12 +92,18 @@ namespace KevGitChanges
                 currentWorkDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
             }
 
+            currentRepoRoot = ResolveRepoRoot(currentWorkDir);
+
+            EnsureOutputPane();
             EnsureIcons();
+            WriteOutput("Icon diagnostics: EnsureIcons invoked on load.");
             InitializeCompareOptions();
             UpdateScopeLabels();
+            SetCheckoutLoading();
 
             // populate base branches from origin for the default workdir
             PopulateBaseBranches(currentWorkDir, selectedRemote);
+            PopulateCheckoutBranches(currentWorkDir);
 
             // start initial refresh only once the solution is loaded
             try
@@ -223,6 +236,7 @@ namespace KevGitChanges
 
                     // Refresh base branch list from remote
                     PopulateBaseBranches(workDir, selectedRemote);
+                    PopulateCheckoutBranches(workDir);
 
                     string baseBranch = null;
                     string selectedBase = null;
@@ -310,6 +324,7 @@ namespace KevGitChanges
 
                     // show chosen base branch in UI
                     currentWorkDir = workDir;
+                    currentRepoRoot = ResolveRepoRoot(workDir);
                     currentBaseBranch = baseBranch;
 
                     // If BaseBranchCombo has selection prefer that as the base branch
@@ -447,6 +462,112 @@ namespace KevGitChanges
                     BaseBranchCombo.SelectedIndex = 0;
                 }
             });
+        }
+
+        private void PopulateCheckoutBranches(string repoRoot)
+        {
+            if (string.IsNullOrWhiteSpace(repoRoot)) return;
+            var branches = new System.Collections.Generic.List<string>();
+            try
+            {
+                var outp = RunGit(repoRoot, "for-each-ref refs/heads --format=%(refname:short)");
+                if (IsGitRepoError(outp))
+                {
+                    SetCheckoutLoading();
+                    return;
+                }
+                if (!string.IsNullOrWhiteSpace(outp))
+                {
+                    using (var sr = new System.IO.StringReader(outp))
+                    {
+                        string ln;
+                        while ((ln = sr.ReadLine()) != null)
+                        {
+                            var name = ln.Trim();
+                            if (string.IsNullOrWhiteSpace(name)) continue;
+                            branches.Add(name);
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            branches.Sort(StringComparer.OrdinalIgnoreCase);
+            var current = currentBranch;
+
+            this.Dispatcher.Invoke(() =>
+            {
+                if (CheckoutBranchCombo == null) return;
+                ignoreCheckoutSelection = true;
+                if (branches.Count == 0)
+                {
+                    CheckoutBranchCombo.ItemsSource = new System.Collections.Generic.List<string> { LoadingLabel };
+                    CheckoutBranchCombo.SelectedIndex = 0;
+                }
+                else
+                {
+                    CheckoutBranchCombo.ItemsSource = branches;
+                    if (!string.IsNullOrWhiteSpace(current) && branches.Contains(current))
+                    {
+                        CheckoutBranchCombo.SelectedItem = current;
+                    }
+                    else if (branches.Count > 0)
+                    {
+                        CheckoutBranchCombo.SelectedIndex = 0;
+                    }
+                }
+                ignoreCheckoutSelection = false;
+            });
+        }
+
+        private void SetCheckoutLoading()
+        {
+            try
+            {
+                this.Dispatcher.Invoke(() =>
+                {
+                    if (CheckoutBranchCombo == null) return;
+                    ignoreCheckoutSelection = true;
+                    CheckoutBranchCombo.ItemsSource = new System.Collections.Generic.List<string> { LoadingLabel };
+                    CheckoutBranchCombo.SelectedIndex = 0;
+                    ignoreCheckoutSelection = false;
+                });
+            }
+            catch { }
+        }
+
+        private void CheckoutBranchCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (ignoreCheckoutSelection) return;
+            try
+            {
+                var target = CheckoutBranchCombo.SelectedItem as string;
+                if (string.IsNullOrWhiteSpace(target)) return;
+                if (!string.IsNullOrWhiteSpace(currentBranch) && target.Equals(currentBranch, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                if (string.IsNullOrWhiteSpace(currentWorkDir)) return;
+                WriteOutput($"Checking out {target}...");
+                Task.Run(() =>
+                {
+                    var res = RunGit(currentWorkDir, $"checkout -q \"{target}\"");
+                    if (IsGitError(res))
+                    {
+                        UpdateStatus("Checkout failed: " + res.Trim());
+                        return;
+                    }
+                    currentBranch = target;
+                    WriteOutput($"Checked out {target}.");
+                    PopulateCheckoutBranches(currentWorkDir);
+                    StartRefresh();
+                });
+            }
+            catch
+            {
+                WriteOutput("Checkout failed.");
+            }
         }
 
         private void SaveSelectedBaseBranch(string repoRoot, string branch)
@@ -910,6 +1031,12 @@ namespace KevGitChanges
             if (node == null) return;
             node.IsExpanded = node.Children.Count > 0;
             node.Icon = node.IsFile ? fileIcon : folderIcon;
+            node.IconMoniker = node.IsFile ? KnownMonikers.TextFile : KnownMonikers.FolderClosed;
+            if (iconDiagnosticsCount < 1)
+            {
+                iconDiagnosticsCount++;
+                WriteOutput($"Icon diagnostics: folder={DescribeImage(folderIcon)}, file={DescribeImage(fileIcon)}");
+            }
             foreach (var child in node.Children)
             {
                 ApplyNodeVisuals(child);
@@ -919,10 +1046,158 @@ namespace KevGitChanges
 
         private void EnsureIcons()
         {
-            if (folderIcon != null && fileIcon != null) return;
-            folderIcon = GetShellIcon(true);
-            fileIcon = GetShellIcon(false);
+            if (folderIcon != null && fileIcon != null)
+            {
+                if (!iconDiagnosticsLogged)
+                {
+                    iconDiagnosticsLogged = true;
+                    WriteOutput("Icon diagnostics: already set before EnsureIcons.");
+                }
+                return;
+            }
+            folderIcon = GetVsMonikerImage(KnownMonikers.FolderClosed, "FolderClosed");
+            fileIcon = GetVsMonikerImage(KnownMonikers.Document, "Document");
+            if (folderIcon == null) folderIcon = CreateFolderIcon();
+            if (fileIcon == null) fileIcon = GetShellIcon(false);
             if (folderIcon == null) folderIcon = fileIcon;
+            if (!iconDiagnosticsLogged)
+            {
+                iconDiagnosticsLogged = true;
+                WriteOutput($"Icon diagnostics: folder={DescribeImage(folderIcon)}, file={DescribeImage(fileIcon)}");
+            }
+        }
+
+        private static string DescribeImage(ImageSource image)
+        {
+            if (image == null) return "null";
+            return image.GetType().Name;
+        }
+
+        private ImageSource GetVsMonikerImage(ImageMoniker moniker, string name)
+        {
+            try
+            {
+                ImageSource result = null;
+                ThreadHelper.JoinableTaskFactory.Run(async () =>
+                {
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    var imageService = Package.GetGlobalService(typeof(SVsImageService)) as IVsImageService2;
+                    if (imageService == null)
+                    {
+                        WriteOutput("Icon diagnostics: SVsImageService2 unavailable.");
+                        return;
+                    }
+
+                    WriteOutput($"Icon diagnostics: resolving {name} moniker (Id={moniker.Id}).");
+                    var attrs1 = new ImageAttributes();
+                    attrs1.StructSize = Marshal.SizeOf(typeof(ImageAttributes));
+                    attrs1.ImageType = (uint)_UIImageType.IT_Bitmap;
+                    attrs1.Format = (uint)_UIDataFormat.DF_WPF;
+                    attrs1.LogicalWidth = 16;
+                    attrs1.LogicalHeight = 16;
+                    attrs1.Flags = (uint)_ImageAttributesFlags.IAF_RequiredFlags;
+                    if (TryGetMonikerImage(imageService, moniker, attrs1, name, "bitmap", out var img1))
+                    {
+                        result = img1;
+                        return;
+                    }
+
+                    var attrs2 = new ImageAttributes();
+                    attrs2.StructSize = Marshal.SizeOf(typeof(ImageAttributes));
+                    attrs2.ImageType = (uint)_UIImageType.IT_Icon;
+                    attrs2.Format = (uint)_UIDataFormat.DF_WPF;
+                    attrs2.LogicalWidth = 16;
+                    attrs2.LogicalHeight = 16;
+                    attrs2.Flags = (uint)_ImageAttributesFlags.IAF_RequiredFlags;
+                    if (TryGetMonikerImage(imageService, moniker, attrs2, name, "icon", out var img2))
+                    {
+                        result = img2;
+                        return;
+                    }
+                });
+                return result;
+            }
+            catch
+            {
+                WriteOutput("Icon diagnostics: exception while resolving moniker.");
+                return null;
+            }
+        }
+
+        private bool TryGetMonikerImage(IVsImageService2 imageService, ImageMoniker moniker, ImageAttributes attrs, string name, string flavor, out ImageSource img)
+        {
+            img = null;
+            try
+            {
+                var uiObj = imageService.GetImage(moniker, attrs);
+                if (uiObj == null)
+                {
+                    WriteOutput($"Icon diagnostics: {name} moniker returned null ({flavor}).");
+                    return false;
+                }
+                uiObj.get_Data(out object data);
+                if (data is ImageSource imgSrc)
+                {
+                    img = imgSrc;
+                    WriteOutput($"Icon diagnostics: {name} moniker resolved ({flavor}) as ImageSource.");
+                    return true;
+                }
+                if (data is System.Drawing.Bitmap bmp)
+                {
+                    var hBmp = bmp.GetHbitmap();
+                    try
+                    {
+                        var src = Imaging.CreateBitmapSourceFromHBitmap(hBmp, IntPtr.Zero, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(16, 16));
+                        if (src.CanFreeze) src.Freeze();
+                        img = src;
+                        WriteOutput($"Icon diagnostics: {name} moniker resolved ({flavor}) as Bitmap.");
+                        return true;
+                    }
+                    finally
+                    {
+                        DeleteObject(hBmp);
+                    }
+                }
+                if (data is System.Drawing.Icon ico)
+                {
+                    var src = Imaging.CreateBitmapSourceFromHIcon(ico.Handle, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(16, 16));
+                    if (src.CanFreeze) src.Freeze();
+                    img = src;
+                    WriteOutput($"Icon diagnostics: {name} moniker resolved ({flavor}) as Icon.");
+                    return true;
+                }
+                var typeName = data == null ? "null" : data.GetType().Name;
+                WriteOutput($"Icon diagnostics: {name} moniker data not ImageSource ({flavor}): {typeName}.");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                WriteOutput($"Icon diagnostics: {name} moniker exception ({flavor}): {ex.Message}");
+                return false;
+            }
+        }
+
+        private static ImageSource CreateFolderIcon()
+        {
+            try
+            {
+                var border = new SolidColorBrush(Color.FromRgb(194, 154, 0));
+                var tabFill = new SolidColorBrush(Color.FromRgb(255, 224, 102));
+                var bodyFill = new SolidColorBrush(Color.FromRgb(255, 209, 77));
+                border.Freeze();
+                tabFill.Freeze();
+                bodyFill.Freeze();
+
+                var group = new DrawingGroup();
+                group.Children.Add(new GeometryDrawing(tabFill, new Pen(border, 1), new RectangleGeometry(new Rect(1, 3, 7, 3))));
+                group.Children.Add(new GeometryDrawing(bodyFill, new Pen(border, 1), new RectangleGeometry(new Rect(1, 5, 14, 9))));
+                if (group.CanFreeze) group.Freeze();
+                return new DrawingImage(group);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static ImageSource GetShellIcon(bool isFolder)
@@ -981,6 +1256,9 @@ namespace KevGitChanges
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool DestroyIcon(IntPtr hIcon);
 
+        [DllImport("gdi32.dll", SetLastError = true)]
+        private static extern bool DeleteObject(IntPtr hObject);
+
 
         private static void FreezeBrush(Brush brush)
         {
@@ -1020,7 +1298,7 @@ namespace KevGitChanges
             // open the local working copy if available
             if (!string.IsNullOrWhiteSpace(currentWorkDir))
             {
-                var full = System.IO.Path.Combine(currentWorkDir, file.Replace('/', System.IO.Path.DirectorySeparatorChar));
+                var full = ResolveWorkspacePath(file);
                 if (System.IO.File.Exists(full))
                 {
                     // open in Visual Studio
@@ -1159,22 +1437,31 @@ namespace KevGitChanges
             var left = ScopeToRef(leftScope);
             var right = ScopeToRef(rightScope);
 
+            if (IsMockCompareEnabled())
+            {
+                WriteCompareDiagnostics(file, leftScope, rightScope, left, right, "Mock compare enabled");
+                if (!TryLaunchGitDifftool(file, left, right))
+                {
+                    UpdateStatus("Unable to launch git difftool.");
+                }
+                return;
+            }
+
             if (!HasGitDifftoolConfigured(currentWorkDir))
             {
-                LaunchVsCompare(file, leftScope, rightScope);
+                if (!LaunchVsCompare(file, leftScope, rightScope))
+                {
+                    UpdateStatus("Unable to open compare window.");
+                }
                 return;
             }
 
             try
             {
-                var args = BuildDiffArgs(left, right, file);
-                if (string.IsNullOrWhiteSpace(args)) return;
-                var psi = new System.Diagnostics.ProcessStartInfo("git", args)
+                if (!TryLaunchGitDifftool(file, left, right))
                 {
-                    UseShellExecute = true,
-                    WorkingDirectory = currentWorkDir
-                };
-                System.Diagnostics.Process.Start(psi);
+                    UpdateStatus("Unable to launch git difftool.");
+                }
             }
             catch (System.Exception ex)
             {
@@ -1208,13 +1495,13 @@ namespace KevGitChanges
             }
             if (string.IsNullOrWhiteSpace(leftRef))
             {
-                return $"difftool --no-prompt {rightRef} -- \"{file}\"";
+                return $"difftool -y {rightRef} -- \"{file}\"";
             }
             if (string.IsNullOrWhiteSpace(rightRef))
             {
-                return $"difftool --no-prompt {leftRef} -- \"{file}\"";
+                return $"difftool -y {leftRef} -- \"{file}\"";
             }
-            return $"difftool --no-prompt {leftRef} {rightRef} -- \"{file}\"";
+            return $"difftool -y {leftRef} {rightRef} -- \"{file}\"";
         }
 
         private bool HasGitDifftoolConfigured(string workDir)
@@ -1231,13 +1518,78 @@ namespace KevGitChanges
             return true;
         }
 
+        private bool IsMockCompareEnabled()
+        {
+            try
+            {
+                var env = Environment.GetEnvironmentVariable("KEVGITCHANGES_MOCK_COMPARE");
+                if (!string.IsNullOrWhiteSpace(env) && IsTruthy(env)) return true;
+            }
+            catch { }
+
+            try
+            {
+                var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                var dir = System.IO.Path.Combine(appData, "KevGitChanges");
+                var file = System.IO.Path.Combine(dir, "compare.mock");
+                if (!System.IO.File.Exists(file)) return false;
+                var txt = System.IO.File.ReadAllText(file);
+                return string.IsNullOrWhiteSpace(txt) || IsTruthy(txt);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsTruthy(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return false;
+            var v = value.Trim();
+            return v.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+                   v.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                   v.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+                   v.Equals("on", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void WriteCompareDiagnostics(string file, string leftScope, string rightScope, string leftRef, string rightRef, string reason)
+        {
+            try
+            {
+                var tool = RunGit(currentWorkDir, "config --get diff.tool");
+                var toolCmd = string.Empty;
+                if (!string.IsNullOrWhiteSpace(tool))
+                {
+                    var t = tool.Trim();
+                    toolCmd = RunGit(currentWorkDir, $"config --get difftool.{t}.cmd");
+                    if (string.IsNullOrWhiteSpace(toolCmd))
+                    {
+                        toolCmd = RunGit(currentWorkDir, $"config --get difftool.{t}.path");
+                    }
+                }
+
+                WriteOutput("Compare diagnostics:");
+                WriteOutput($"  Reason: {reason}");
+                WriteOutput($"  File: {file}");
+                WriteOutput($"  LeftScope: {leftScope}  LeftRef: {leftRef}");
+                WriteOutput($"  RightScope: {rightScope}  RightRef: {rightRef}");
+                WriteOutput($"  WorkDir: {currentWorkDir}");
+                if (!string.IsNullOrWhiteSpace(tool)) WriteOutput($"  diff.tool: {tool.Trim()}");
+                if (!string.IsNullOrWhiteSpace(toolCmd)) WriteOutput($"  difftool cmd/path: {toolCmd.Trim()}");
+            }
+            catch
+            {
+                // ignore diagnostics failures
+            }
+        }
+
         private struct CompareFile
         {
             public string Path;
             public string Label;
         }
 
-        private void LaunchVsCompare(string file, string leftScope, string rightScope)
+        private bool LaunchVsCompare(string file, string leftScope, string rightScope)
         {
             try
             {
@@ -1248,7 +1600,8 @@ namespace KevGitChanges
                 if (diffService == null)
                 {
                     UpdateStatus("Visual Studio compare service not available.");
-                    return;
+                    WriteOutput("Compare diagnostics: SVsDifferenceService unavailable.");
+                    return false;
                 }
 
                 var caption = $"{left.Label} vs {right.Label}";
@@ -1256,23 +1609,31 @@ namespace KevGitChanges
                 {
                     dynamic svc = diffService;
                     svc.OpenComparisonWindow2(left.Path, right.Path, left.Label, right.Label, caption, null, null, 0);
-                    return;
+                    return true;
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    WriteOutput("Compare diagnostics: OpenComparisonWindow2 failed: " + ex.Message);
+                }
 
                 try
                 {
                     dynamic svc = diffService;
                     svc.OpenComparisonWindow(left.Path, right.Path, left.Label, right.Label, caption, null, null, 0);
+                    return true;
                 }
-                catch
+                catch (Exception ex)
                 {
+                    WriteOutput("Compare diagnostics: OpenComparisonWindow failed: " + ex.Message);
                     UpdateStatus("Unable to open Visual Studio compare window.");
+                    return false;
                 }
             }
             catch (Exception ex)
             {
                 UpdateStatus("Unable to launch Visual Studio compare: " + ex.Message);
+                WriteOutput("Compare diagnostics: VS compare launch exception: " + ex.Message);
+                return false;
             }
         }
 
@@ -1281,7 +1642,7 @@ namespace KevGitChanges
             var label = GetScopeDisplay(scopeKey);
             if (string.IsNullOrWhiteSpace(scopeKey) || string.Equals(scopeKey, "Workspace", StringComparison.OrdinalIgnoreCase))
             {
-                var full = System.IO.Path.Combine(workDir, relPath.Replace('/', System.IO.Path.DirectorySeparatorChar));
+                var full = ResolveWorkspacePath(relPath);
                 if (System.IO.File.Exists(full))
                 {
                     return new CompareFile { Path = full, Label = label };
@@ -1336,6 +1697,75 @@ namespace KevGitChanges
             return tempFile;
         }
 
+        private bool TryLaunchGitDifftool(string file, string leftRef, string rightRef)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(currentWorkDir)) return false;
+                var args = BuildDiffArgs(leftRef, rightRef, file);
+                if (string.IsNullOrWhiteSpace(args)) return false;
+                WriteOutput("Compare diagnostics: launching git difftool.");
+                WriteOutput($"  args: {args}");
+                var psi = new System.Diagnostics.ProcessStartInfo("git", args)
+                {
+                    UseShellExecute = true,
+                    WorkingDirectory = currentWorkDir
+                };
+                System.Diagnostics.Process.Start(psi);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                WriteOutput("Compare diagnostics: git difftool failed: " + ex.Message);
+                return false;
+            }
+        }
+
+        private string ResolveRepoRoot(string workDir)
+        {
+            if (string.IsNullOrWhiteSpace(workDir)) return null;
+            try
+            {
+                var res = RunGit(workDir, "rev-parse --show-toplevel");
+                if (!string.IsNullOrWhiteSpace(res))
+                {
+                    var trimmed = res.Trim();
+                    if (!trimmed.StartsWith("fatal:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return trimmed;
+                    }
+                }
+            }
+            catch
+            {
+                // fall through to .git walk
+            }
+
+            try
+            {
+                var dir = new System.IO.DirectoryInfo(workDir);
+                while (dir != null && !System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, ".git")))
+                {
+                    dir = dir.Parent;
+                }
+                return dir?.FullName ?? workDir;
+            }
+            catch
+            {
+                return workDir;
+            }
+        }
+
+        private string ResolveWorkspacePath(string relPath)
+        {
+            if (string.IsNullOrWhiteSpace(relPath)) return relPath;
+            if (System.IO.Path.IsPathRooted(relPath)) return relPath;
+            var root = !string.IsNullOrWhiteSpace(currentRepoRoot) ? currentRepoRoot : currentWorkDir;
+            if (string.IsNullOrWhiteSpace(root)) return relPath;
+            return System.IO.Path.Combine(root, relPath.Replace('/', System.IO.Path.DirectorySeparatorChar));
+        }
+
+
         private string RunGit(string workingDirectory, string arguments)
         {
             try
@@ -1371,13 +1801,34 @@ namespace KevGitChanges
         private void WriteOutput(string line)
         {
             if (string.IsNullOrWhiteSpace(line)) return;
+            if (line.StartsWith("Icon diagnostics:", StringComparison.OrdinalIgnoreCase))
+            {
+                lastIconDiagnostics = line;
+            }
+            try
+            {
+                if (ThreadHelper.CheckAccess())
+                {
+                    EnsureOutputPaneSync();
+                    outputPane?.OutputString(line + Environment.NewLine);
+                    return;
+                }
+            }
+            catch
+            {
+                // fall through to async path
+            }
             ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
             {
                 try
                 {
                     await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                     var outputWindow = Package.GetGlobalService(typeof(SVsOutputWindow)) as IVsOutputWindow;
-                    if (outputWindow == null) return;
+                    if (outputWindow == null)
+                    {
+                        System.Diagnostics.Debug.WriteLine(line);
+                        return;
+                    }
 
                     if (outputPane == null)
                     {
@@ -1387,12 +1838,53 @@ namespace KevGitChanges
                     }
 
                     outputPane?.OutputStringThreadSafe(line + Environment.NewLine);
+                    outputPane?.Activate();
                 }
                 catch
                 {
                     // ignore logging failures
                 }
             });
+        }
+
+        private void EnsureOutputPane()
+        {
+            try
+            {
+                ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+                {
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    var outputWindow = Package.GetGlobalService(typeof(SVsOutputWindow)) as IVsOutputWindow;
+                    if (outputWindow == null) return;
+                    if (outputPane != null) return;
+                    var paneGuid = OutputPaneGuid;
+                    outputWindow.CreatePane(ref paneGuid, "Kev Git Changes", 1, 1);
+                    outputWindow.GetPane(ref paneGuid, out outputPane);
+                    outputPane?.Activate();
+                });
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
+        private void EnsureOutputPaneSync()
+        {
+            try
+            {
+                var outputWindow = Package.GetGlobalService(typeof(SVsOutputWindow)) as IVsOutputWindow;
+                if (outputWindow == null) return;
+                if (outputPane != null) return;
+                var paneGuid = OutputPaneGuid;
+                outputWindow.CreatePane(ref paneGuid, "Kev Git Changes", 1, 1);
+                outputWindow.GetPane(ref paneGuid, out outputPane);
+                outputPane?.Activate();
+            }
+            catch
+            {
+                // ignore
+            }
         }
 
         private string GetScopeKeyFromCombo(ComboBox combo)
@@ -1520,6 +2012,14 @@ namespace KevGitChanges
         {
             return !string.IsNullOrWhiteSpace(payload) &&
                 payload.IndexOf("fatal: not a git repository", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool IsGitError(string payload)
+        {
+            if (string.IsNullOrWhiteSpace(payload)) return false;
+            var trimmed = payload.TrimStart();
+            return trimmed.StartsWith("fatal:", StringComparison.OrdinalIgnoreCase) ||
+                   trimmed.StartsWith("error:", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsLoadingLabel(string value)

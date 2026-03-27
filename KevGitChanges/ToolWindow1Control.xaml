@@ -5,6 +5,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:vsshell="clr-namespace:Microsoft.VisualStudio.Shell;assembly=Microsoft.VisualStudio.Shell.15.0"
              xmlns:local="clr-namespace:KevGitChanges"
+             xmlns:imaging="clr-namespace:Microsoft.VisualStudio.Imaging;assembly=Microsoft.VisualStudio.Imaging"
              Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}"
              Foreground="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}"
              mc:Ignorable="d"
@@ -18,6 +19,7 @@
             <SolidColorBrush x:Key="ScopeLBrush" Color="#8B5CF6" />
             <SolidColorBrush x:Key="ScopeRBrush" Color="#F97316" />
             <SolidColorBrush x:Key="ScopeMBrush" Color="#14B8A6" />
+            <Color x:Key="FolderBiasColor">#E6C24A</Color>
             <!-- Use Visual Studio themed brushes for tree views -->
             <Style TargetType="TreeView">
                 <Setter Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}" />
@@ -25,23 +27,9 @@
                 <Setter Property="BorderThickness" Value="0" />
             </Style>
 
-            <!-- Ensure combo toggle hover is darker: style ToggleButton used in ComboBox template -->
-            <Style TargetType="ToggleButton">
-                <Setter Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}" />
-                <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-                <Style.Triggers>
-                    <Trigger Property="IsMouseOver" Value="True">
-                        <Setter Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}" />
-                        <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-                    </Trigger>
-                    <Trigger Property="IsPressed" Value="True">
-                        <Setter Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}" />
-                    </Trigger>
-                </Style.Triggers>
-            </Style>
-
             <!-- Stronger ComboBox template to prevent OS bright hover - use themed background and control template triggers -->
             <Style x:Key="ThemedComboBoxTemplate" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+                <Setter Property="OverridesDefaultStyle" Value="True" />
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="ComboBox">
@@ -49,14 +37,30 @@
                                 <Grid>
                                     <ToggleButton x:Name="ToggleButton" IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
                                                   Background="Transparent" BorderBrush="Transparent" Focusable="False" Padding="6,0,6,0">
+                                        <ToggleButton.Template>
+                                            <ControlTemplate TargetType="ToggleButton">
+                                                <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+                                                    <ContentPresenter />
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsEnabled" Value="False">
+                                                        <Setter Property="Opacity" Value="0.6" />
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </ToggleButton.Template>
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="22" />
                                             </Grid.ColumnDefinitions>
                                             <ContentPresenter Grid.Column="0" Margin="6,0,6,0" VerticalAlignment="Center"
-                                                              Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" />
-                                            <Path Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,0,6,0" Data="M 0 0 L 4 4 L 8 0 Z" Fill="{TemplateBinding Foreground}" />
+                                                              Content="{TemplateBinding SelectionBoxItem}"
+                                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                                            <Path Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,0,6,0"
+                                                  Data="M 0 0 L 4 4 L 8 0 Z"
+                                                  Fill="{TemplateBinding Foreground}" />
                                         </Grid>
                                     </ToggleButton>
                                     <Popup Name="Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}" AllowsTransparency="True" Focusable="False">
@@ -69,9 +73,6 @@
                                 </Grid>
                             </Border>
                             <ControlTemplate.Triggers>
-                                <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}" />
-                                </Trigger>
                                 <Trigger Property="IsEnabled" Value="False">
                                     <Setter TargetName="Bd" Property="Opacity" Value="0.6" />
                                 </Trigger>
@@ -84,6 +85,8 @@
             <Style TargetType="TreeViewItem">
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+                <Setter Property="OverridesDefaultStyle" Value="True" />
+                <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
                 <Setter Property="FontSize" Value="12" />
                 <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                 <Setter Property="Template">
@@ -109,9 +112,19 @@
                                                       ClickMode="Press" Focusable="False" Width="16" Height="16" Margin="0,0,4,0"
                                                       Background="Transparent" BorderThickness="0"
                                                       Visibility="{Binding HasItems, RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource BoolToVisibility}}">
-                                            <Path x:Name="ExpanderPath" Data="M 0 0 L 6 6 L 12 0 Z" Fill="{TemplateBinding Foreground}">
+                                            <ToggleButton.Template>
+                                                <ControlTemplate TargetType="ToggleButton">
+                                                    <Border Background="Transparent" BorderThickness="0">
+                                                        <ContentPresenter
+                                                            ContentSource="Content"
+                                                            HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                            VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                                                    </Border>
+                                                </ControlTemplate>
+                                            </ToggleButton.Template>
+                                            <Path x:Name="ExpanderPath" Data="M 0 0 L 4 4 L 8 0" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.4" StrokeEndLineCap="Round" StrokeLineJoin="Round">
                                                 <Path.RenderTransform>
-                                                    <RotateTransform Angle="0" CenterX="6" CenterY="3" />
+                                                    <RotateTransform Angle="-90" CenterX="4" CenterY="2" />
                                                 </Path.RenderTransform>
                                             </Path>
                                         </ToggleButton>
@@ -120,7 +133,7 @@
                                 </Border>
 
                                 <ContentPresenter Grid.Column="1" ContentTemplate="{DynamicResource StatusColumnsTemplate}" Content="{Binding}" HorizontalAlignment="Right" />
-                                <ItemsPresenter Grid.Row="1" Grid.ColumnSpan="2" />
+                                <ItemsPresenter x:Name="ItemsHost" Grid.Row="1" Grid.ColumnSpan="2" Visibility="Collapsed" />
                             </Grid>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="HasItems" Value="True">
@@ -129,21 +142,22 @@
                                 <Trigger Property="IsExpanded" Value="True">
                                     <Setter TargetName="ExpanderPath" Property="RenderTransform">
                                         <Setter.Value>
-                                            <RotateTransform Angle="180" CenterX="6" CenterY="3" />
+                                            <RotateTransform Angle="0" CenterX="4" CenterY="2" />
                                         </Setter.Value>
                                     </Setter>
+                                    <Setter TargetName="ItemsHost" Property="Visibility" Value="Visible" />
                                 </Trigger>
                                 <Trigger Property="IsSelected" Value="True">
-                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}" />
-                                    <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}" />
+                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBorderKey}}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
                                 </Trigger>
                                 <MultiTrigger>
                                     <MultiTrigger.Conditions>
                                         <Condition Property="IsSelected" Value="True" />
                                         <Condition Property="IsSelectionActive" Value="False" />
                                     </MultiTrigger.Conditions>
-                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource {x:Static SystemColors.InactiveSelectionHighlightBrushKey}}" />
-                                    <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}}" />
+                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBorderKey}}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
                                 </MultiTrigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -153,17 +167,12 @@
 
             <!-- Themed ComboBox and Button with disabled visuals -->
             <Style TargetType="ComboBox">
+                <Setter Property="OverridesDefaultStyle" Value="True" />
                 <Setter Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}" />
                 <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
                 <Setter Property="BorderBrush" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
                 <Setter Property="Padding" Value="4,2" />
                 <Style.Triggers>
-                    <!-- Disable bright hover by keeping background/text same on mouse over -->
-                    <Trigger Property="IsMouseOver" Value="True">
-                        <!-- use a slightly darker brush on hover to avoid bright system highlight -->
-                        <Setter Property="Background" Value="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}" />
-                        <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-                    </Trigger>
                     <Trigger Property="IsEnabled" Value="False">
                         <Setter Property="Opacity" Value="0.6" />
                         <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
@@ -172,17 +181,29 @@
             </Style>
 
             <Style TargetType="Button">
+                <Setter Property="OverridesDefaultStyle" Value="True" />
                 <Setter Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}" />
                 <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
                 <Setter Property="BorderBrush" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
                 <Setter Property="Padding" Value="4,2" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="1"
+                                    Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Opacity" Value="0.6" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
                 <Style.Triggers>
-                    <!-- Keep button background same on hover to avoid bright system highlight -->
-                    <Trigger Property="IsMouseOver" Value="True">
-                        <!-- use a slightly darker brush on hover to avoid bright system highlight -->
-                        <Setter Property="Background" Value="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}" />
-                        <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-                    </Trigger>
                     <Trigger Property="IsEnabled" Value="False">
                         <Setter Property="Opacity" Value="0.6" />
                         <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
@@ -218,7 +239,6 @@
                 <Setter Property="Width" Value="18" />
                 <Setter Property="Height" Value="16" />
             </Style>
-
 
             <DataTemplate x:Key="StatusColumnsTemplate">
                 <Grid HorizontalAlignment="Right" Width="220">
@@ -299,10 +319,6 @@
                                 <ContentPresenter ContentSource="Header" RecognizesAccessKey="True" />
                             </Border>
                             <ControlTemplate.Triggers>
-                                <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}" />
-                                    <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}" />
-                                </Trigger>
                                 <Trigger Property="IsEnabled" Value="False">
                                     <Setter TargetName="Bd" Property="Opacity" Value="0.6" />
                                 </Trigger>
@@ -324,7 +340,6 @@
                     </Setter.Value>
                 </Setter>
             </Style>
-
         </Grid.Resources>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -335,6 +350,7 @@
         <StackPanel Orientation="Horizontal" Margin="6" Grid.Row="0">
             <TextBlock Margin="6" VerticalAlignment="Center">Base branch</TextBlock>
             <ComboBox Name="BaseBranchCombo" Margin="6" SelectionChanged="BaseBranchCombo_SelectionChanged"
+                      Style="{StaticResource ThemedComboBoxTemplate}"
                       Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
                       Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
                       BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}">
@@ -344,52 +360,6 @@
                         <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
                     </Style>
                 </ComboBox.ItemContainerStyle>
-                <ComboBox.Template>
-                    <ControlTemplate TargetType="ComboBox">
-                        <Grid>
-                            <ToggleButton Name="ToggleButton"
-                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
-                                          Background="{TemplateBinding Background}"
-                                          BorderBrush="{TemplateBinding BorderBrush}"
-                                          Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
-                                          Padding="6,0,6,0"
-                                          Focusable="False">
-                                <ToggleButton.Style>
-                                    <Style TargetType="ToggleButton">
-                                        <Setter Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}" />
-                                        <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-                                        <Style.Triggers>
-                                            <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter Property="Background" Value="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}" />
-                                                <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-                                            </Trigger>
-                                            <Trigger Property="IsPressed" Value="True">
-                                                <Setter Property="Background" Value="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}" />
-                                            </Trigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </ToggleButton.Style>
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="22" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Margin="6,0,6,0" HorizontalAlignment="Left" VerticalAlignment="Center"
-                                               Text="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=SelectionBoxItem}"
-                                               Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" TextTrimming="CharacterEllipsis" />
-                                    <Path Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,0,6,0" Data="M 0 0 L 4 4 L 8 0 Z" Fill="{TemplateBinding Foreground}" />
-                                </Grid>
-                            </ToggleButton>
-                            <Popup Name="Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}" AllowsTransparency="True" Focusable="False">
-                                <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1">
-                                    <ScrollViewer CanContentScroll="True">
-                                        <ItemsPresenter />
-                                    </ScrollViewer>
-                                </Border>
-                            </Popup>
-                        </Grid>
-                    </ControlTemplate>
-                </ComboBox.Template>
             </ComboBox>
             <Button Content="Fetch" Click="Fetch_Click" Padding="5" Margin="6" Name="fetchButton"
                     Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
@@ -399,6 +369,12 @@
                     Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
                     Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
                     BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+            <TextBlock Margin="6" VerticalAlignment="Center">Branch</TextBlock>
+            <ComboBox Name="CheckoutBranchCombo" Margin="6" SelectionChanged="CheckoutBranchCombo_SelectionChanged"
+                      Style="{StaticResource ThemedComboBoxTemplate}"
+                      Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
+                      Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
+                      BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
             <ProgressBar Name="BusyIndicator" Width="80" Margin="6" Visibility="Collapsed" IsIndeterminate="True" />
         </StackPanel>
 
@@ -430,20 +406,39 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
             <!-- Local changes List -->
-            <StackPanel Grid.Column="0" Margin="4">
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Stretch">
+            <Grid Grid.Column="0" Margin="4">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Stretch" Grid.Row="0">
                     <TextBlock FontWeight="Bold" VerticalAlignment="Center">Changes</TextBlock>
                     <TextBlock Name="LocalCount" Margin="8,0,0,0" VerticalAlignment="Center" Foreground="Gray">(0)</TextBlock>
                 </StackPanel>
-                <TreeView Name="LocalTree" Margin="0,6,0,0" PreviewMouseRightButtonDown="TreeView_PreviewMouseRightButtonDown" Grid.IsSharedSizeScope="True">
+                <TreeView Name="LocalTree" Grid.Row="1" Margin="0,6,0,0" PreviewMouseRightButtonDown="TreeView_PreviewMouseRightButtonDown"
+                          Grid.IsSharedSizeScope="True"
+                          ScrollViewer.VerticalScrollBarVisibility="Auto"
+                          ScrollViewer.CanContentScroll="True"
+                          VirtualizingStackPanel.IsVirtualizing="True"
+                          VirtualizingStackPanel.VirtualizationMode="Recycling">
                     <TreeView.ItemTemplate>
                         <HierarchicalDataTemplate ItemsSource="{Binding Children}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="16" />
+                                    <ColumnDefinition Width="26" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <Image Width="16" Height="16" Margin="0,0,6,0" Source="{Binding Icon}" />
+                                <imaging:CrispImage Width="20" Height="16" Margin="0,0,4,0" Moniker="{Binding IconMoniker}">
+                                    <imaging:CrispImage.Style>
+                                        <Style TargetType="imaging:CrispImage">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsFile}" Value="False">
+                                                    <Setter Property="imaging:CrispImage.GrayscaleBiasColor" Value="{StaticResource FolderBiasColor}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </imaging:CrispImage.Style>
+                                </imaging:CrispImage>
                                 <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                             </Grid>
                         </HierarchicalDataTemplate>
@@ -460,7 +455,7 @@
                         </ContextMenu>
                     </TreeView.ContextMenu>
                 </TreeView>
-            </StackPanel>
+            </Grid>
         </Grid>
     </Grid>
 </UserControl>

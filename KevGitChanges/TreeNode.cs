@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Windows.Media;
+using Microsoft.VisualStudio.Imaging.Interop;
 
 namespace KevGitChanges
 {
@@ -9,6 +10,7 @@ namespace KevGitChanges
         public string FullPath { get; set; }
         public List<TreeNode> Children { get; } = new List<TreeNode>();
         public ImageSource Icon { get; set; }
+        public ImageMoniker IconMoniker { get; set; }
         public int Depth { get; set; }
         public string WStatus { get; set; }
         public string LStatus { get; set; }
