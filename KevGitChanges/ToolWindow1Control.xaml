@@ -186,6 +186,7 @@
                 <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
                 <Setter Property="BorderBrush" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
                 <Setter Property="Padding" Value="4,2" />
+                <Setter Property="Height" Value="24" />
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="Button">
@@ -220,6 +221,14 @@
                 <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
             </Style>
 
+            <Style TargetType="ProgressBar">
+                <Setter Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.CommandBarOptionsBackgroundKey}}" />
+                <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.CommandBarTextInactiveKey}}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource {x:Static vsshell:VsBrushes.CommandBarBorderKey}}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Opacity" Value="0.8" />
+            </Style>
+
             <Style x:Key="ScopeCellStyle" TargetType="StackPanel">
                 <Setter Property="Visibility" Value="Visible" />
                 <Style.Triggers>
@@ -241,46 +250,34 @@
             </Style>
 
             <DataTemplate x:Key="StatusColumnsTemplate">
-                <Grid HorizontalAlignment="Right" Width="220">
+                <Grid HorizontalAlignment="Right">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="48" />
-                        <ColumnDefinition Width="48" />
-                        <ColumnDefinition Width="48" />
-                        <ColumnDefinition Width="48" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
                     <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Right" Style="{StaticResource ScopeCellStyle}" Tag="{Binding WStatus}" ToolTip="{Binding WToolTip}">
                         <Border Background="{StaticResource ScopeWBrush}" Style="{StaticResource PillBox}">
-                            <TextBlock Text="W" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
-                        </Border>
-                        <Border Background="{Binding WBrush}" Style="{StaticResource PillBox}">
                             <TextBlock Text="{Binding WStatus}" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
                         </Border>
                     </StackPanel>
 
                     <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" Style="{StaticResource ScopeCellStyle}" Tag="{Binding LStatus}" ToolTip="{Binding LToolTip}">
                         <Border Background="{StaticResource ScopeLBrush}" Style="{StaticResource PillBox}">
-                            <TextBlock Text="L" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
-                        </Border>
-                        <Border Background="{Binding LBrush}" Style="{StaticResource PillBox}">
                             <TextBlock Text="{Binding LStatus}" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
                         </Border>
                     </StackPanel>
 
                     <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" Style="{StaticResource ScopeCellStyle}" Tag="{Binding RStatus}" ToolTip="{Binding RToolTip}">
                         <Border Background="{StaticResource ScopeRBrush}" Style="{StaticResource PillBox}">
-                            <TextBlock Text="R" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
-                        </Border>
-                        <Border Background="{Binding RBrush}" Style="{StaticResource PillBox}">
                             <TextBlock Text="{Binding RStatus}" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
                         </Border>
                     </StackPanel>
 
                     <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Right" Style="{StaticResource ScopeCellStyle}" Tag="{Binding MStatus}" ToolTip="{Binding MToolTip}">
                         <Border Background="{StaticResource ScopeMBrush}" Style="{StaticResource PillBox}">
-                            <TextBlock Text="B" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
-                        </Border>
-                        <Border Background="{Binding MBrush}" Style="{StaticResource PillBox}">
                             <TextBlock Text="{Binding MStatus}" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
                         </Border>
                     </StackPanel>
@@ -347,9 +344,25 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
-        <StackPanel Orientation="Horizontal" Margin="6" Grid.Row="0">
-            <TextBlock Margin="6" VerticalAlignment="Center">Base branch</TextBlock>
-            <ComboBox Name="BaseBranchCombo" Margin="6" SelectionChanged="BaseBranchCombo_SelectionChanged"
+        <Grid Grid.Row="0" Margin="6,4,6,2">
+            <StackPanel Orientation="Horizontal">
+                <CheckBox Name="AutoRefreshCheckBox" IsChecked="True" Checked="AutoRefreshCheckBox_Changed" Unchecked="AutoRefreshCheckBox_Changed" Margin="4,2,8,2" VerticalAlignment="Center" Content="Auto" />
+                <Button Content="Refresh" Click="Refresh_Click" Margin="4,2" Name="refreshButton"
+                        Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
+                        Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
+                        BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+                <TextBlock Margin="6,2,4,2" VerticalAlignment="Center">Branch</TextBlock>
+                <ComboBox Name="CheckoutBranchCombo" Margin="4,2" Height="24" SelectionChanged="CheckoutBranchCombo_SelectionChanged"
+                          Style="{StaticResource ThemedComboBoxTemplate}"
+                          Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
+                          Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
+                          BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+            </StackPanel>
+        </Grid>
+
+        <StackPanel Orientation="Horizontal" Margin="6,0,6,2" Grid.Row="1">
+            <TextBlock Margin="6,2,4,2" VerticalAlignment="Center">Base branch</TextBlock>
+            <ComboBox Name="BaseBranchCombo" Margin="4,2" Height="24" SelectionChanged="BaseBranchCombo_SelectionChanged"
                       Style="{StaticResource ThemedComboBoxTemplate}"
                       Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
                       Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
@@ -361,45 +374,51 @@
                     </Style>
                 </ComboBox.ItemContainerStyle>
             </ComboBox>
-            <Button Content="Fetch" Click="Fetch_Click" Padding="5" Margin="6" Name="fetchButton"
-                    Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
-                    Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
-                    BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-            <Button Content="Refresh" Click="Refresh_Click" Padding="5" Margin="6" Name="refreshButton"
-                    Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
-                    Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
-                    BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-            <TextBlock Margin="6" VerticalAlignment="Center">Branch</TextBlock>
-            <ComboBox Name="CheckoutBranchCombo" Margin="6" SelectionChanged="CheckoutBranchCombo_SelectionChanged"
+            <TextBlock Margin="6,2,4,2" VerticalAlignment="Center">Compare</TextBlock>
+            <ComboBox Name="CompareFromCombo" Width="110" Margin="4,2" Height="24" SelectionChanged="CompareSelection_Changed"
                       Style="{StaticResource ThemedComboBoxTemplate}"
                       Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
                       Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
                       BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-            <ProgressBar Name="BusyIndicator" Width="80" Margin="6" Visibility="Collapsed" IsIndeterminate="True" />
-        </StackPanel>
-
-        <StackPanel Orientation="Horizontal" Margin="6" Grid.Row="1">
-            <TextBlock Margin="6,6,4,6" VerticalAlignment="Center">Compare</TextBlock>
-            <ComboBox Name="CompareFromCombo" Width="110" Margin="4,6" SelectionChanged="CompareSelection_Changed"
-                      Style="{StaticResource ThemedComboBoxTemplate}"
-                      Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
-                      Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
-                      BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-            <TextBlock Margin="4,6" VerticalAlignment="Center">vs</TextBlock>
-            <ComboBox Name="CompareToCombo" Width="110" Margin="4,6" SelectionChanged="CompareSelection_Changed"
+            <TextBlock Margin="4,2" VerticalAlignment="Center">vs</TextBlock>
+            <ComboBox Name="CompareToCombo" Width="110" Margin="4,2" Height="24" SelectionChanged="CompareSelection_Changed"
                       Style="{StaticResource ThemedComboBoxTemplate}"
                       Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
                       Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
                       BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
         </StackPanel>
 
-        <StackPanel Orientation="Horizontal" Margin="6" Grid.Row="2">
-            <TextBlock Margin="6,6,4,6" VerticalAlignment="Center">Show</TextBlock>
-            <CheckBox Name="ShowWorkspace" Margin="6,6,0,6" Content="Workspace" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" />
-            <CheckBox Name="ShowLocal" Margin="10,6,0,6" Content="Local" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" />
-            <CheckBox Name="ShowRemote" Margin="10,6,0,6" Content="Remote" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" />
-            <CheckBox Name="ShowMain" Margin="10,6,0,6" Content="Base" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" />
-        </StackPanel>
+        <WrapPanel Margin="6,0,6,4" Grid.Row="2">
+            <TextBlock Margin="6,2,4,2" VerticalAlignment="Center">Show</TextBlock>
+            <StackPanel Orientation="Horizontal" Margin="6,2,0,2" VerticalAlignment="Center">
+                <CheckBox Name="ShowWorkspace" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" VerticalAlignment="Center" />
+                <Border Background="{StaticResource ScopeWBrush}" Style="{StaticResource PillBox}" Margin="6,0,4,0">
+                    <TextBlock Text="W" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
+                </Border>
+                <TextBlock Name="ShowWorkspaceLabel" VerticalAlignment="Center" Text="Workspace" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="10,2,0,2" VerticalAlignment="Center">
+                <CheckBox Name="ShowLocal" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" VerticalAlignment="Center" />
+                <Border Background="{StaticResource ScopeLBrush}" Style="{StaticResource PillBox}" Margin="6,0,4,0">
+                    <TextBlock Text="L" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
+                </Border>
+                <TextBlock Name="ShowLocalLabel" VerticalAlignment="Center" Text="Local" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="10,2,0,2" VerticalAlignment="Center">
+                <CheckBox Name="ShowRemote" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" VerticalAlignment="Center" />
+                <Border Background="{StaticResource ScopeRBrush}" Style="{StaticResource PillBox}" Margin="6,0,4,0">
+                    <TextBlock Text="R" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
+                </Border>
+                <TextBlock Name="ShowRemoteLabel" VerticalAlignment="Center" Text="Remote" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="10,2,0,2" VerticalAlignment="Center">
+                <CheckBox Name="ShowMain" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" VerticalAlignment="Center" />
+                <Border Background="{StaticResource ScopeMBrush}" Style="{StaticResource PillBox}" Margin="6,0,4,0">
+                    <TextBlock Text="B" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
+                </Border>
+                <TextBlock Name="ShowMainLabel" VerticalAlignment="Center" Text="Base" />
+            </StackPanel>
+        </WrapPanel>
 
         <Grid Grid.Row="3" Margin="6">
             <Grid.ColumnDefinitions>
@@ -410,12 +429,13 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Stretch" Grid.Row="0">
                     <TextBlock FontWeight="Bold" VerticalAlignment="Center">Changes</TextBlock>
                     <TextBlock Name="LocalCount" Margin="8,0,0,0" VerticalAlignment="Center" Foreground="Gray">(0)</TextBlock>
                 </StackPanel>
-                <TreeView Name="LocalTree" Grid.Row="1" Margin="0,6,0,0" PreviewMouseRightButtonDown="TreeView_PreviewMouseRightButtonDown"
+                <TreeView Name="LocalTree" Grid.Row="1" Margin="0,6,0,0" PreviewMouseRightButtonDown="TreeView_PreviewMouseRightButtonDown" ContextMenuOpening="LocalTree_ContextMenuOpening"
                           Grid.IsSharedSizeScope="True"
                           ScrollViewer.VerticalScrollBarVisibility="Auto"
                           ScrollViewer.CanContentScroll="True"
@@ -424,6 +444,15 @@
                     <TreeView.ItemTemplate>
                         <HierarchicalDataTemplate ItemsSource="{Binding Children}">
                             <Grid>
+                                <Grid.Style>
+                                    <Style TargetType="Grid">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsFile}" Value="True">
+                                                <Setter Property="Margin" Value="26,0,0,0" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Grid.Style>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="26" />
                                     <ColumnDefinition Width="*" />
@@ -455,6 +484,16 @@
                         </ContextMenu>
                     </TreeView.ContextMenu>
                 </TreeView>
+                <Grid Grid.Row="2" Margin="0,6,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <ProgressBar Name="BusyIndicator" Grid.Column="0" Width="80" Height="18" VerticalAlignment="Center" Visibility="Collapsed" IsIndeterminate="True" />
+                    <TextBlock Name="LastRefreshText" Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                               Foreground="{DynamicResource {x:Static vsshell:VsBrushes.CommandBarTextInactiveKey}}" />
+                </Grid>
             </Grid>
         </Grid>
     </Grid>
