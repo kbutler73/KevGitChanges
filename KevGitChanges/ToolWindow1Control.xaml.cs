@@ -39,6 +39,17 @@ namespace KevGitChanges
         private bool iconDiagnosticsLogged;
         private int iconDiagnosticsCount;
         private string lastIconDiagnostics;
+        private System.IO.FileSystemWatcher workspaceWatcher;
+        private System.IO.FileSystemWatcher gitMetadataWatcher;
+        private System.Windows.Threading.DispatcherTimer workspaceRefreshDebounceTimer;
+        private System.Windows.Threading.DispatcherTimer periodicRefreshTimer;
+        private bool refreshInProgress;
+        private bool refreshPending;
+        private DateTime lastRefreshUtc = DateTime.MinValue;
+        private DateTime suppressGitMetadataEventsUntilUtc = DateTime.MinValue;
+        private static readonly TimeSpan WorkspaceRefreshDebounce = TimeSpan.FromMilliseconds(900);
+        private static readonly TimeSpan PeriodicRefreshCheckInterval = TimeSpan.FromSeconds(30);
+        private static readonly TimeSpan PeriodicRefreshThreshold = TimeSpan.FromMinutes(10);
 
         private readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> scopeMap =
             new System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>>(System.StringComparer.OrdinalIgnoreCase);
@@ -71,6 +82,8 @@ namespace KevGitChanges
         {
             this.InitializeComponent();
             this.Loaded += ToolWindow1Control_Loaded;
+            this.Unloaded += ToolWindow1Control_Unloaded;
+            this.IsVisibleChanged += ToolWindow1Control_IsVisibleChanged;
         }
 
         private void ToolWindow1Control_Loaded(object sender, RoutedEventArgs e)
@@ -97,6 +110,9 @@ namespace KevGitChanges
             EnsureOutputPane();
             EnsureIcons();
             WriteOutput("Icon diagnostics: EnsureIcons invoked on load.");
+            UpdateLastRefreshDisplay();
+            EnsureAutoRefreshInfrastructure();
+            RefreshAutoRefreshSubscriptions();
             InitializeCompareOptions();
             UpdateScopeLabels();
             SetCheckoutLoading();
@@ -154,14 +170,33 @@ namespace KevGitChanges
             StartRefresh();
         }
 
+        private void ToolWindow1Control_Unloaded(object sender, RoutedEventArgs e)
+        {
+            StopAutoRefreshInfrastructure();
+        }
+
+        private void ToolWindow1Control_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+        {
+            RefreshAutoRefreshSubscriptions();
+        }
+
         private void StartRefresh()
         {
+            if (refreshInProgress)
+            {
+                refreshPending = true;
+                return;
+            }
+
+            refreshInProgress = true;
+            refreshPending = false;
+            suppressGitMetadataEventsUntilUtc = DateTime.UtcNow.AddSeconds(5);
+
             // show busy indicator and run refresh
             Dispatcher.Invoke(() =>
             {
                 BusyIndicator.Visibility = Visibility.Visible;
                 try { BaseBranchCombo.IsEnabled = false; } catch { }
-                try { fetchButton.IsEnabled = false; } catch { }
                 try { refreshButton.IsEnabled = false; } catch { }
             });
             _ = Task.Run(async () =>
@@ -169,10 +204,16 @@ namespace KevGitChanges
                 await DoRefreshAsync();
                 Dispatcher.Invoke(() =>
                 {
+                    lastRefreshUtc = DateTime.UtcNow;
+                    UpdateLastRefreshDisplay();
+                    refreshInProgress = false;
                     BusyIndicator.Visibility = Visibility.Collapsed;
                     try { BaseBranchCombo.IsEnabled = true; } catch { }
-                    try { fetchButton.IsEnabled = true; } catch { }
                     try { refreshButton.IsEnabled = true; } catch { }
+                    if (refreshPending)
+                    {
+                        StartRefresh();
+                    }
                 });
             });
         }
@@ -225,6 +266,8 @@ namespace KevGitChanges
 
                         workDir = dir.FullName;
                     }
+
+                    RunGit(workDir, "fetch --all --prune");
 
                     currentBranch = RunGit(workDir, "rev-parse --abbrev-ref HEAD");
                     if (string.IsNullOrWhiteSpace(currentBranch))
@@ -325,6 +368,7 @@ namespace KevGitChanges
                     // show chosen base branch in UI
                     currentWorkDir = workDir;
                     currentRepoRoot = ResolveRepoRoot(workDir);
+                    Dispatcher.Invoke(() => RefreshAutoRefreshSubscriptions());
                     currentBaseBranch = baseBranch;
 
                     // If BaseBranchCombo has selection prefer that as the base branch
@@ -639,33 +683,266 @@ namespace KevGitChanges
             StartRefresh();
         }
 
-        private async void Fetch_Click(object sender, RoutedEventArgs e)
+        private void AutoRefreshCheckBox_Changed(object sender, RoutedEventArgs e)
+        {
+            RefreshAutoRefreshSubscriptions();
+        }
+
+        private void UpdateLastRefreshDisplay()
+        {
+            if (LastRefreshText == null) return;
+            LastRefreshText.Text = lastRefreshUtc == DateTime.MinValue
+                ? string.Empty
+                : "Last refreshed " + lastRefreshUtc.ToLocalTime().ToString("h:mm tt").ToLowerInvariant();
+        }
+
+        private void EnsureAutoRefreshInfrastructure()
+        {
+            if (workspaceRefreshDebounceTimer == null)
+            {
+                workspaceRefreshDebounceTimer = new System.Windows.Threading.DispatcherTimer();
+                workspaceRefreshDebounceTimer.Interval = WorkspaceRefreshDebounce;
+                workspaceRefreshDebounceTimer.Tick += WorkspaceRefreshDebounceTimer_Tick;
+            }
+
+            if (periodicRefreshTimer == null)
+            {
+                periodicRefreshTimer = new System.Windows.Threading.DispatcherTimer();
+                periodicRefreshTimer.Interval = PeriodicRefreshCheckInterval;
+                periodicRefreshTimer.Tick += PeriodicRefreshTimer_Tick;
+            }
+        }
+
+        private void StopAutoRefreshInfrastructure()
         {
             try
             {
-                if (string.IsNullOrWhiteSpace(currentWorkDir)) return;
-                Dispatcher.Invoke(() =>
+                if (workspaceRefreshDebounceTimer != null)
                 {
-                    BusyIndicator.Visibility = Visibility.Visible;
-                    try { fetchButton.IsEnabled = false; } catch { }
-                    try { refreshButton.IsEnabled = false; } catch { }
-                });
-
-                await Task.Run(() =>
+                    workspaceRefreshDebounceTimer.Stop();
+                }
+                if (periodicRefreshTimer != null)
                 {
-                    RunGit(currentWorkDir, "fetch --all --prune");
-                    PopulateBaseBranches(currentWorkDir, selectedRemote);
-                });
+                    periodicRefreshTimer.Stop();
+                }
+                if (workspaceWatcher != null)
+                {
+                    workspaceWatcher.EnableRaisingEvents = false;
+                    workspaceWatcher.Created -= WorkspaceWatcher_Changed;
+                    workspaceWatcher.Changed -= WorkspaceWatcher_Changed;
+                    workspaceWatcher.Deleted -= WorkspaceWatcher_Changed;
+                    workspaceWatcher.Renamed -= WorkspaceWatcher_Renamed;
+                    workspaceWatcher.Dispose();
+                    workspaceWatcher = null;
+                }
+                if (gitMetadataWatcher != null)
+                {
+                    gitMetadataWatcher.EnableRaisingEvents = false;
+                    gitMetadataWatcher.Created -= GitMetadataWatcher_Changed;
+                    gitMetadataWatcher.Changed -= GitMetadataWatcher_Changed;
+                    gitMetadataWatcher.Deleted -= GitMetadataWatcher_Changed;
+                    gitMetadataWatcher.Renamed -= GitMetadataWatcher_Renamed;
+                    gitMetadataWatcher.Dispose();
+                    gitMetadataWatcher = null;
+                }
             }
-            finally
+            catch
             {
-                Dispatcher.Invoke(() =>
-                {
-                    BusyIndicator.Visibility = Visibility.Collapsed;
-                    try { fetchButton.IsEnabled = true; } catch { }
-                    try { refreshButton.IsEnabled = true; } catch { }
-                });
+                // ignore watcher shutdown failures
             }
+        }
+
+        private void RefreshAutoRefreshSubscriptions()
+        {
+            if (!IsLoaded || !IsVisible || AutoRefreshCheckBox?.IsChecked != true || string.IsNullOrWhiteSpace(currentRepoRoot) || !System.IO.Directory.Exists(currentRepoRoot))
+            {
+                StopAutoRefreshInfrastructure();
+                return;
+            }
+
+            EnsureAutoRefreshInfrastructure();
+
+            try
+            {
+                if (workspaceWatcher == null || !string.Equals(workspaceWatcher.Path, currentRepoRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (workspaceWatcher != null)
+                    {
+                        workspaceWatcher.EnableRaisingEvents = false;
+                        workspaceWatcher.Created -= WorkspaceWatcher_Changed;
+                        workspaceWatcher.Changed -= WorkspaceWatcher_Changed;
+                        workspaceWatcher.Deleted -= WorkspaceWatcher_Changed;
+                        workspaceWatcher.Renamed -= WorkspaceWatcher_Renamed;
+                        workspaceWatcher.Dispose();
+                    }
+
+                    workspaceWatcher = new System.IO.FileSystemWatcher(currentRepoRoot)
+                    {
+                        IncludeSubdirectories = true,
+                        NotifyFilter = System.IO.NotifyFilters.FileName | System.IO.NotifyFilters.DirectoryName | System.IO.NotifyFilters.LastWrite
+                    };
+                    workspaceWatcher.Created += WorkspaceWatcher_Changed;
+                    workspaceWatcher.Changed += WorkspaceWatcher_Changed;
+                    workspaceWatcher.Deleted += WorkspaceWatcher_Changed;
+                    workspaceWatcher.Renamed += WorkspaceWatcher_Renamed;
+                }
+
+                workspaceWatcher.EnableRaisingEvents = true;
+                EnsureGitMetadataWatcher();
+                periodicRefreshTimer?.Start();
+            }
+            catch (Exception ex)
+            {
+                WriteOutput("Auto refresh setup failed: " + ex.Message);
+            }
+        }
+
+        private void WorkspaceWatcher_Changed(object sender, System.IO.FileSystemEventArgs e)
+        {
+            if (ShouldIgnoreWorkspacePath(e.FullPath)) return;
+            QueueWorkspaceRefresh();
+        }
+
+        private void WorkspaceWatcher_Renamed(object sender, System.IO.RenamedEventArgs e)
+        {
+            if (!ShouldIgnoreWorkspacePath(e.OldFullPath) || !ShouldIgnoreWorkspacePath(e.FullPath))
+            {
+                QueueWorkspaceRefresh();
+            }
+        }
+
+        private void GitMetadataWatcher_Changed(object sender, System.IO.FileSystemEventArgs e)
+        {
+            if (DateTime.UtcNow < suppressGitMetadataEventsUntilUtc) return;
+            if (!ShouldRefreshForGitMetadataPath(e.FullPath)) return;
+            QueueWorkspaceRefresh();
+        }
+
+        private void GitMetadataWatcher_Renamed(object sender, System.IO.RenamedEventArgs e)
+        {
+            if (DateTime.UtcNow < suppressGitMetadataEventsUntilUtc) return;
+            if (ShouldRefreshForGitMetadataPath(e.OldFullPath) || ShouldRefreshForGitMetadataPath(e.FullPath))
+            {
+                QueueWorkspaceRefresh();
+            }
+        }
+
+        private void QueueWorkspaceRefresh()
+        {
+            Dispatcher.BeginInvoke((Action)(() =>
+            {
+                if (!IsLoaded || !IsVisible) return;
+                EnsureAutoRefreshInfrastructure();
+                workspaceRefreshDebounceTimer.Stop();
+                workspaceRefreshDebounceTimer.Start();
+            }));
+        }
+
+        private void WorkspaceRefreshDebounceTimer_Tick(object sender, EventArgs e)
+        {
+            workspaceRefreshDebounceTimer.Stop();
+            StartRefresh();
+        }
+
+        private void PeriodicRefreshTimer_Tick(object sender, EventArgs e)
+        {
+            if (!IsLoaded || !IsVisible || refreshInProgress) return;
+            if (lastRefreshUtc != DateTime.MinValue && (DateTime.UtcNow - lastRefreshUtc) < PeriodicRefreshThreshold) return;
+            StartRefresh();
+        }
+
+        private bool ShouldIgnoreWorkspacePath(string fullPath)
+        {
+            if (string.IsNullOrWhiteSpace(fullPath)) return true;
+
+            var normalized = fullPath.Replace('\\', '/');
+            var segments = normalized.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var segment in segments)
+            {
+                if (segment.Equals(".git", StringComparison.OrdinalIgnoreCase)) return true;
+                if (segment.Equals(".vs", StringComparison.OrdinalIgnoreCase)) return true;
+                if (segment.Equals("bin", StringComparison.OrdinalIgnoreCase)) return true;
+                if (segment.Equals("obj", StringComparison.OrdinalIgnoreCase)) return true;
+                if (segment.Equals("node_modules", StringComparison.OrdinalIgnoreCase)) return true;
+            }
+
+            var fileName = System.IO.Path.GetFileName(fullPath);
+            if (string.IsNullOrWhiteSpace(fileName)) return false;
+            if (fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) return true;
+            if (fileName.EndsWith(".user", StringComparison.OrdinalIgnoreCase)) return true;
+            if (fileName.EndsWith(".suo", StringComparison.OrdinalIgnoreCase)) return true;
+
+            return false;
+        }
+
+        private void EnsureGitMetadataWatcher()
+        {
+            var gitDir = ResolveGitMetadataRoot(currentWorkDir);
+            if (string.IsNullOrWhiteSpace(gitDir) || !System.IO.Directory.Exists(gitDir))
+            {
+                if (gitMetadataWatcher != null)
+                {
+                    gitMetadataWatcher.EnableRaisingEvents = false;
+                }
+                return;
+            }
+
+            if (gitMetadataWatcher == null || !string.Equals(gitMetadataWatcher.Path, gitDir, StringComparison.OrdinalIgnoreCase))
+            {
+                if (gitMetadataWatcher != null)
+                {
+                    gitMetadataWatcher.EnableRaisingEvents = false;
+                    gitMetadataWatcher.Created -= GitMetadataWatcher_Changed;
+                    gitMetadataWatcher.Changed -= GitMetadataWatcher_Changed;
+                    gitMetadataWatcher.Deleted -= GitMetadataWatcher_Changed;
+                    gitMetadataWatcher.Renamed -= GitMetadataWatcher_Renamed;
+                    gitMetadataWatcher.Dispose();
+                }
+
+                gitMetadataWatcher = new System.IO.FileSystemWatcher(gitDir)
+                {
+                    IncludeSubdirectories = true,
+                    NotifyFilter = System.IO.NotifyFilters.FileName | System.IO.NotifyFilters.DirectoryName | System.IO.NotifyFilters.LastWrite
+                };
+                gitMetadataWatcher.Created += GitMetadataWatcher_Changed;
+                gitMetadataWatcher.Changed += GitMetadataWatcher_Changed;
+                gitMetadataWatcher.Deleted += GitMetadataWatcher_Changed;
+                gitMetadataWatcher.Renamed += GitMetadataWatcher_Renamed;
+            }
+
+            gitMetadataWatcher.EnableRaisingEvents = true;
+        }
+
+        private string ResolveGitMetadataRoot(string workDir)
+        {
+            if (string.IsNullOrWhiteSpace(workDir)) return null;
+            var gitDir = RunGit(workDir, "rev-parse --git-dir");
+            if (string.IsNullOrWhiteSpace(gitDir)) return null;
+
+            var trimmed = gitDir.Trim();
+            if (trimmed.StartsWith("fatal:", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("error:", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            if (System.IO.Path.IsPathRooted(trimmed)) return trimmed;
+            return System.IO.Path.GetFullPath(System.IO.Path.Combine(workDir, trimmed));
+        }
+
+        private bool ShouldRefreshForGitMetadataPath(string fullPath)
+        {
+            if (string.IsNullOrWhiteSpace(fullPath)) return false;
+
+            var normalized = fullPath.Replace('\\', '/');
+            if (normalized.EndsWith("/HEAD", StringComparison.OrdinalIgnoreCase)) return true;
+            if (normalized.EndsWith("/index", StringComparison.OrdinalIgnoreCase)) return true;
+            if (normalized.EndsWith("/packed-refs", StringComparison.OrdinalIgnoreCase)) return true;
+            if (normalized.IndexOf("/refs/heads/", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (normalized.IndexOf("/refs/remotes/", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (normalized.IndexOf("/logs/HEAD", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+
+            return false;
         }
 
         private class ChangeItem
@@ -1410,6 +1687,21 @@ namespace KevGitChanges
             }
         }
 
+        private void LocalTree_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+        {
+            try
+            {
+                if (!(LocalTree?.SelectedItem is TreeNode node) || !node.IsFile)
+                {
+                    e.Handled = true;
+                }
+            }
+            catch
+            {
+                e.Handled = true;
+            }
+        }
+
         private static T FindAncestor<T>(DependencyObject current) where T : DependencyObject
         {
             while (current != null)
@@ -2030,6 +2322,28 @@ namespace KevGitChanges
             }
         }
 
+        private string GetScopeFilterLabel(string scopeKey)
+        {
+            switch ((scopeKey ?? string.Empty).Trim())
+            {
+                case "Workspace":
+                    return "Workspace";
+
+                case "Local":
+                    return string.IsNullOrWhiteSpace(currentBranch) ? "Local" : currentBranch;
+
+                case "Remote":
+                    return string.IsNullOrWhiteSpace(currentBranch) ? "Remote" : $"{selectedRemote}/{currentBranch}";
+
+                case "Main":
+                    if (IsLoadingLabel(currentBaseBranch) || IsGitRepoError(currentBaseBranch)) return LoadingLabel;
+                    return string.IsNullOrWhiteSpace(currentBaseBranch) ? "Base" : currentBaseBranch;
+
+                default:
+                    return scopeKey;
+            }
+        }
+
         private void UpdateScopeLabels()
         {
             var localLabel = GetScopeDisplay("Local");
@@ -2038,9 +2352,10 @@ namespace KevGitChanges
 
             this.Dispatcher.Invoke(() =>
             {
-                if (ShowLocal != null) ShowLocal.Content = localLabel;
-                if (ShowRemote != null) ShowRemote.Content = remoteLabel;
-                if (ShowMain != null) ShowMain.Content = mainLabel;
+                if (ShowWorkspaceLabel != null) ShowWorkspaceLabel.Text = GetScopeFilterLabel("Workspace");
+                if (ShowLocalLabel != null) ShowLocalLabel.Text = GetScopeFilterLabel("Local");
+                if (ShowRemoteLabel != null) ShowRemoteLabel.Text = GetScopeFilterLabel("Remote");
+                if (ShowMainLabel != null) ShowMainLabel.Text = GetScopeFilterLabel("Main");
 
                 UpdateCompareCombos("Workspace", "Local");
                 UpdateCompareMenuHeader();
