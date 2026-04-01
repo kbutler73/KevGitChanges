@@ -45,6 +45,8 @@ namespace KevGitChanges
         private System.Windows.Threading.DispatcherTimer periodicRefreshTimer;
         private bool refreshInProgress;
         private bool refreshPending;
+        private string pendingRefreshReason = "Initial load";
+        private string lastRefreshReason = string.Empty;
         private DateTime lastRefreshUtc = DateTime.MinValue;
         private DateTime suppressGitMetadataEventsUntilUtc = DateTime.MinValue;
         private static readonly TimeSpan WorkspaceRefreshDebounce = TimeSpan.FromMilliseconds(900);
@@ -132,7 +134,7 @@ namespace KevGitChanges
                     if (!string.IsNullOrWhiteSpace(solPath) && System.IO.File.Exists(solPath))
                     {
                         // solution already open
-                        StartRefresh();
+                        StartRefresh("Solution loaded");
                     }
                     else
                     {
@@ -144,12 +146,12 @@ namespace KevGitChanges
                 else
                 {
                     // no DTE available, start refresh
-                    StartRefresh();
+                    StartRefresh("Initial load");
                 }
             }
             catch
             {
-                StartRefresh();
+                StartRefresh("Initial load");
             }
         }
 
@@ -167,7 +169,7 @@ namespace KevGitChanges
             catch { }
 
             // start refresh now that the solution is opened
-            StartRefresh();
+            StartRefresh("Solution opened");
         }
 
         private void ToolWindow1Control_Unloaded(object sender, RoutedEventArgs e)
@@ -180,22 +182,32 @@ namespace KevGitChanges
             RefreshAutoRefreshSubscriptions();
         }
 
-        private void StartRefresh()
+        private void StartRefresh(string reason = null)
         {
+            var refreshReason = string.IsNullOrWhiteSpace(reason) ? pendingRefreshReason : reason;
+            if (string.IsNullOrWhiteSpace(refreshReason))
+            {
+                refreshReason = "Refresh";
+            }
+
             if (refreshInProgress)
             {
                 refreshPending = true;
+                pendingRefreshReason = refreshReason;
                 return;
             }
 
             refreshInProgress = true;
             refreshPending = false;
+            pendingRefreshReason = refreshReason;
+            lastRefreshReason = refreshReason;
             suppressGitMetadataEventsUntilUtc = DateTime.UtcNow.AddSeconds(5);
 
             // show busy indicator and run refresh
             Dispatcher.Invoke(() =>
             {
                 BusyIndicator.Visibility = Visibility.Visible;
+                UpdateRefreshReasonDisplay(refreshReason);
                 try { BaseBranchCombo.IsEnabled = false; } catch { }
                 try { refreshButton.IsEnabled = false; } catch { }
             });
@@ -208,6 +220,7 @@ namespace KevGitChanges
                     UpdateLastRefreshDisplay();
                     refreshInProgress = false;
                     BusyIndicator.Visibility = Visibility.Collapsed;
+                    UpdateRefreshReasonDisplay(lastRefreshReason);
                     try { BaseBranchCombo.IsEnabled = true; } catch { }
                     try { refreshButton.IsEnabled = true; } catch { }
                     if (refreshPending)
@@ -605,7 +618,7 @@ namespace KevGitChanges
                     currentBranch = target;
                     WriteOutput($"Checked out {target}.");
                     PopulateCheckoutBranches(currentWorkDir);
-                    StartRefresh();
+                    StartRefresh("Branch checkout");
                 });
             }
             catch
@@ -680,7 +693,7 @@ namespace KevGitChanges
         private async void Refresh_Click(object sender, RoutedEventArgs e)
         {
             // Use StartRefresh to run refresh with busy indicator
-            StartRefresh();
+            StartRefresh("Manual");
         }
 
         private void AutoRefreshCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -694,6 +707,14 @@ namespace KevGitChanges
             LastRefreshText.Text = lastRefreshUtc == DateTime.MinValue
                 ? string.Empty
                 : "Last refreshed " + lastRefreshUtc.ToLocalTime().ToString("h:mm tt").ToLowerInvariant();
+        }
+
+        private void UpdateRefreshReasonDisplay(string reason)
+        {
+            if (RefreshReasonText == null) return;
+            RefreshReasonText.Text = string.IsNullOrWhiteSpace(reason)
+                ? string.Empty
+                : "Trigger: " + reason;
         }
 
         private void EnsureAutoRefreshInfrastructure()
@@ -800,14 +821,14 @@ namespace KevGitChanges
         private void WorkspaceWatcher_Changed(object sender, System.IO.FileSystemEventArgs e)
         {
             if (ShouldIgnoreWorkspacePath(e.FullPath)) return;
-            QueueWorkspaceRefresh();
+            QueueWorkspaceRefresh(GetWorkspaceRefreshReason(e.ChangeType, e.FullPath));
         }
 
         private void WorkspaceWatcher_Renamed(object sender, System.IO.RenamedEventArgs e)
         {
             if (!ShouldIgnoreWorkspacePath(e.OldFullPath) || !ShouldIgnoreWorkspacePath(e.FullPath))
             {
-                QueueWorkspaceRefresh();
+                QueueWorkspaceRefresh(GetWorkspaceRenameRefreshReason(e.OldFullPath, e.FullPath));
             }
         }
 
@@ -815,7 +836,7 @@ namespace KevGitChanges
         {
             if (DateTime.UtcNow < suppressGitMetadataEventsUntilUtc) return;
             if (!ShouldRefreshForGitMetadataPath(e.FullPath)) return;
-            QueueWorkspaceRefresh();
+            QueueWorkspaceRefresh(GetGitRefreshReason(e.ChangeType, e.FullPath));
         }
 
         private void GitMetadataWatcher_Renamed(object sender, System.IO.RenamedEventArgs e)
@@ -823,16 +844,18 @@ namespace KevGitChanges
             if (DateTime.UtcNow < suppressGitMetadataEventsUntilUtc) return;
             if (ShouldRefreshForGitMetadataPath(e.OldFullPath) || ShouldRefreshForGitMetadataPath(e.FullPath))
             {
-                QueueWorkspaceRefresh();
+                QueueWorkspaceRefresh(GetGitRenameRefreshReason(e.OldFullPath, e.FullPath));
             }
         }
 
-        private void QueueWorkspaceRefresh()
+        private void QueueWorkspaceRefresh(string reason)
         {
             Dispatcher.BeginInvoke((Action)(() =>
             {
                 if (!IsLoaded || !IsVisible) return;
                 EnsureAutoRefreshInfrastructure();
+                pendingRefreshReason = string.IsNullOrWhiteSpace(reason) ? "File change" : reason;
+                UpdateRefreshReasonDisplay(pendingRefreshReason);
                 workspaceRefreshDebounceTimer.Stop();
                 workspaceRefreshDebounceTimer.Start();
             }));
@@ -848,7 +871,7 @@ namespace KevGitChanges
         {
             if (!IsLoaded || !IsVisible || refreshInProgress) return;
             if (lastRefreshUtc != DateTime.MinValue && (DateTime.UtcNow - lastRefreshUtc) < PeriodicRefreshThreshold) return;
-            StartRefresh();
+            StartRefresh("Periodic");
         }
 
         private bool ShouldIgnoreWorkspacePath(string fullPath)
@@ -871,8 +894,80 @@ namespace KevGitChanges
             if (fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) return true;
             if (fileName.EndsWith(".user", StringComparison.OrdinalIgnoreCase)) return true;
             if (fileName.EndsWith(".suo", StringComparison.OrdinalIgnoreCase)) return true;
+            if (IsGitIgnoredPath(fullPath)) return true;
 
             return false;
+        }
+
+        private bool IsGitIgnoredPath(string fullPath)
+        {
+            try
+            {
+                var repoRoot = !string.IsNullOrWhiteSpace(currentRepoRoot) ? currentRepoRoot : currentWorkDir;
+                if (string.IsNullOrWhiteSpace(repoRoot) || !System.IO.Directory.Exists(repoRoot) || string.IsNullOrWhiteSpace(fullPath))
+                {
+                    return false;
+                }
+
+                var relativePath = GetRelativePath(repoRoot, fullPath);
+                if (string.IsNullOrWhiteSpace(relativePath)) return false;
+
+                int exitCode;
+                RunGit(repoRoot, $"check-ignore -q -- \"{relativePath}\"", out exitCode);
+                return exitCode == 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string GetRelativePath(string rootPath, string fullPath)
+        {
+            if (string.IsNullOrWhiteSpace(rootPath) || string.IsNullOrWhiteSpace(fullPath)) return null;
+
+            var rootUri = new Uri(AppendDirectorySeparator(rootPath));
+            var pathUri = new Uri(fullPath);
+            if (!rootUri.IsBaseOf(pathUri)) return null;
+
+            return Uri.UnescapeDataString(rootUri.MakeRelativeUri(pathUri).ToString()).Replace('/', '\\');
+        }
+
+        private static string AppendDirectorySeparator(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return path;
+            return path.EndsWith(System.IO.Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+                ? path
+                : path + System.IO.Path.DirectorySeparatorChar;
+        }
+
+        private string GetWorkspaceRefreshReason(System.IO.WatcherChangeTypes changeType, string fullPath)
+        {
+            return "Workspace " + changeType.ToString().ToLowerInvariant() + ": " + FormatRefreshPath(fullPath);
+        }
+
+        private string GetWorkspaceRenameRefreshReason(string oldFullPath, string newFullPath)
+        {
+            return "Workspace renamed: " + FormatRefreshPath(oldFullPath) + " -> " + FormatRefreshPath(newFullPath);
+        }
+
+        private string GetGitRefreshReason(System.IO.WatcherChangeTypes changeType, string fullPath)
+        {
+            return ".git " + changeType.ToString().ToLowerInvariant() + ": " + FormatRefreshPath(fullPath);
+        }
+
+        private string GetGitRenameRefreshReason(string oldFullPath, string newFullPath)
+        {
+            return ".git renamed: " + FormatRefreshPath(oldFullPath) + " -> " + FormatRefreshPath(newFullPath);
+        }
+
+        private string FormatRefreshPath(string fullPath)
+        {
+            if (string.IsNullOrWhiteSpace(fullPath)) return "(unknown)";
+
+            var repoRoot = !string.IsNullOrWhiteSpace(currentRepoRoot) ? currentRepoRoot : currentWorkDir;
+            var relativePath = GetRelativePath(repoRoot, fullPath);
+            return string.IsNullOrWhiteSpace(relativePath) ? System.IO.Path.GetFileName(fullPath) : relativePath.Replace('\\', '/');
         }
 
         private void EnsureGitMetadataWatcher()
@@ -2167,6 +2262,13 @@ namespace KevGitChanges
 
         private string RunGit(string workingDirectory, string arguments)
         {
+            int ignored;
+            return RunGit(workingDirectory, arguments, out ignored);
+        }
+
+        private string RunGit(string workingDirectory, string arguments, out int exitCode)
+        {
+            exitCode = -1;
             try
             {
                 WriteOutput($"git {arguments}");
@@ -2184,6 +2286,7 @@ namespace KevGitChanges
                     var outStr = p.StandardOutput.ReadToEnd();
                     var errStr = p.StandardError.ReadToEnd();
                     p.WaitForExit();
+                    exitCode = p.ExitCode;
                     if (p.ExitCode != 0 && string.IsNullOrWhiteSpace(outStr))
                     {
                         return errStr;
