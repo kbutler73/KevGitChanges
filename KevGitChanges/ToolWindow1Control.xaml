@@ -30,10 +30,11 @@
             <!-- Stronger ComboBox template to prevent OS bright hover - use themed background and control template triggers -->
             <Style x:Key="ThemedComboBoxTemplate" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
                 <Setter Property="OverridesDefaultStyle" Value="True" />
+                <Setter Property="BorderThickness" Value="0" />
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="ComboBox">
-                            <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" Padding="0">
+                            <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Padding="0">
                                 <Grid>
                                     <ToggleButton x:Name="ToggleButton" IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
                                                   Background="Transparent" BorderBrush="Transparent" Focusable="False" Padding="6,0,6,0">
@@ -102,7 +103,8 @@
                                     <RowDefinition Height="*" />
                                 </Grid.RowDefinitions>
 
-                                <Border x:Name="Bd" Grid.ColumnSpan="2" Background="{TemplateBinding Background}">
+                                <ContentPresenter Grid.Column="1" Panel.ZIndex="0" ContentTemplate="{DynamicResource StatusColumnsTemplate}" Content="{Binding}" HorizontalAlignment="Right" />
+                                <Border x:Name="Bd" Grid.ColumnSpan="2" Panel.ZIndex="1" Background="{TemplateBinding Background}">
                                     <Grid Margin="{Binding Depth, Converter={StaticResource TreeIndentToMargin}}">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto" />
@@ -131,8 +133,6 @@
                                         <ContentPresenter x:Name="PART_Header" Grid.Column="1" ContentSource="Header" HorizontalAlignment="Stretch" />
                                     </Grid>
                                 </Border>
-
-                                <ContentPresenter Grid.Column="1" ContentTemplate="{DynamicResource StatusColumnsTemplate}" Content="{Binding}" HorizontalAlignment="Right" />
                                 <ItemsPresenter x:Name="ItemsHost" Grid.Row="1" Grid.ColumnSpan="2" Visibility="Collapsed" />
                             </Grid>
                             <ControlTemplate.Triggers>
@@ -170,7 +170,8 @@
                 <Setter Property="OverridesDefaultStyle" Value="True" />
                 <Setter Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}" />
                 <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-                <Setter Property="BorderBrush" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+                <Setter Property="BorderBrush" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
                 <Setter Property="Padding" Value="4,2" />
                 <Style.Triggers>
                     <Trigger Property="IsEnabled" Value="False">
@@ -184,7 +185,8 @@
                 <Setter Property="OverridesDefaultStyle" Value="True" />
                 <Setter Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}" />
                 <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-                <Setter Property="BorderBrush" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+                <Setter Property="BorderBrush" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
                 <Setter Property="Padding" Value="4,2" />
                 <Setter Property="Height" Value="24" />
                 <Setter Property="Template">
@@ -192,7 +194,7 @@
                         <ControlTemplate TargetType="Button">
                             <Border Background="{TemplateBinding Background}"
                                     BorderBrush="{TemplateBinding BorderBrush}"
-                                    BorderThickness="1"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
                                     Padding="{TemplateBinding Padding}">
                                 <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Border>
@@ -350,75 +352,83 @@
                 <Button Content="Refresh" Click="Refresh_Click" Margin="4,2" Name="refreshButton"
                         Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
                         Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
-                        BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+                        BorderBrush="Transparent" />
                 <TextBlock Margin="6,2,4,2" VerticalAlignment="Center">Branch</TextBlock>
                 <ComboBox Name="CheckoutBranchCombo" Margin="4,2" Height="24" SelectionChanged="CheckoutBranchCombo_SelectionChanged"
                           Style="{StaticResource ThemedComboBoxTemplate}"
                           Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
                           Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
-                          BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+                          BorderBrush="Transparent" />
             </StackPanel>
         </Grid>
 
-        <StackPanel Orientation="Horizontal" Margin="6,0,6,2" Grid.Row="1">
-            <TextBlock Margin="6,2,4,2" VerticalAlignment="Center">Base branch</TextBlock>
-            <ComboBox Name="BaseBranchCombo" Margin="4,2" Height="24" SelectionChanged="BaseBranchCombo_SelectionChanged"
-                      Style="{StaticResource ThemedComboBoxTemplate}"
-                      Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
-                      Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
-                      BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}">
-                <ComboBox.ItemContainerStyle>
-                    <Style TargetType="ComboBoxItem">
-                        <Setter Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}" />
-                        <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-                    </Style>
-                </ComboBox.ItemContainerStyle>
-            </ComboBox>
-            <TextBlock Margin="6,2,4,2" VerticalAlignment="Center">Compare</TextBlock>
-            <ComboBox Name="CompareFromCombo" Width="110" Margin="4,2" Height="24" SelectionChanged="CompareSelection_Changed"
-                      Style="{StaticResource ThemedComboBoxTemplate}"
-                      Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
-                      Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
-                      BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-            <TextBlock Margin="4,2" VerticalAlignment="Center">vs</TextBlock>
-            <ComboBox Name="CompareToCombo" Width="110" Margin="4,2" Height="24" SelectionChanged="CompareSelection_Changed"
-                      Style="{StaticResource ThemedComboBoxTemplate}"
-                      Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
-                      Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
-                      BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-        </StackPanel>
+        <Expander Grid.Row="1" Grid.RowSpan="2" Margin="6,0,6,4" IsExpanded="False"
+                  Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
+                  Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}">
+            <Expander.Header>
+                <TextBlock Margin="4,2">More filters</TextBlock>
+            </Expander.Header>
+            <StackPanel Margin="0,4,0,0">
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                    <TextBlock Margin="6,2,4,2" VerticalAlignment="Center">Base branch</TextBlock>
+                    <ComboBox Name="BaseBranchCombo" Margin="4,2" Height="24" SelectionChanged="BaseBranchCombo_SelectionChanged"
+                              Style="{StaticResource ThemedComboBoxTemplate}"
+                              Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
+                              Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
+                              BorderBrush="Transparent">
+                        <ComboBox.ItemContainerStyle>
+                            <Style TargetType="ComboBoxItem">
+                                <Setter Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}" />
+                                <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+                            </Style>
+                        </ComboBox.ItemContainerStyle>
+                    </ComboBox>
+                    <TextBlock Margin="6,2,4,2" VerticalAlignment="Center">Compare</TextBlock>
+                    <ComboBox Name="CompareFromCombo" Width="110" Margin="4,2" Height="24" SelectionChanged="CompareSelection_Changed"
+                              Style="{StaticResource ThemedComboBoxTemplate}"
+                              Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
+                              Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
+                              BorderBrush="Transparent" />
+                    <TextBlock Margin="4,2" VerticalAlignment="Center">vs</TextBlock>
+                    <ComboBox Name="CompareToCombo" Width="110" Margin="4,2" Height="24" SelectionChanged="CompareSelection_Changed"
+                              Style="{StaticResource ThemedComboBoxTemplate}"
+                              Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
+                              Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
+                              BorderBrush="Transparent" />
+                </StackPanel>
 
-        <WrapPanel Margin="6,0,6,4" Grid.Row="2">
-            <TextBlock Margin="6,2,4,2" VerticalAlignment="Center">Show</TextBlock>
-            <StackPanel Orientation="Horizontal" Margin="6,2,0,2" VerticalAlignment="Center">
-                <CheckBox Name="ShowWorkspace" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" VerticalAlignment="Center" />
-                <Border Background="{StaticResource ScopeWBrush}" Style="{StaticResource PillBox}" Margin="6,0,4,0">
-                    <TextBlock Text="W" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
-                </Border>
-                <TextBlock Name="ShowWorkspaceLabel" VerticalAlignment="Center" Text="Workspace" />
+                <StackPanel Margin="6,0,0,0">
+                    <StackPanel Orientation="Horizontal" Margin="0,2,0,2" VerticalAlignment="Center">
+                        <CheckBox Name="ShowWorkspace" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" VerticalAlignment="Center" />
+                        <Border Background="{StaticResource ScopeWBrush}" Style="{StaticResource PillBox}" Margin="6,0,4,0">
+                            <TextBlock Text="W" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
+                        </Border>
+                        <TextBlock Name="ShowWorkspaceLabel" VerticalAlignment="Center" Text="Workspace" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,2,0,2" VerticalAlignment="Center">
+                        <CheckBox Name="ShowLocal" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" VerticalAlignment="Center" />
+                        <Border Background="{StaticResource ScopeLBrush}" Style="{StaticResource PillBox}" Margin="6,0,4,0">
+                            <TextBlock Text="L" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
+                        </Border>
+                        <TextBlock Name="ShowLocalLabel" VerticalAlignment="Center" Text="Local" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,2,0,2" VerticalAlignment="Center">
+                        <CheckBox Name="ShowRemote" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" VerticalAlignment="Center" />
+                        <Border Background="{StaticResource ScopeRBrush}" Style="{StaticResource PillBox}" Margin="6,0,4,0">
+                            <TextBlock Text="R" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
+                        </Border>
+                        <TextBlock Name="ShowRemoteLabel" VerticalAlignment="Center" Text="Remote" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,2,0,2" VerticalAlignment="Center">
+                        <CheckBox Name="ShowMain" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" VerticalAlignment="Center" />
+                        <Border Background="{StaticResource ScopeMBrush}" Style="{StaticResource PillBox}" Margin="6,0,4,0">
+                            <TextBlock Text="B" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
+                        </Border>
+                        <TextBlock Name="ShowMainLabel" VerticalAlignment="Center" Text="Base" />
+                    </StackPanel>
+                </StackPanel>
             </StackPanel>
-            <StackPanel Orientation="Horizontal" Margin="10,2,0,2" VerticalAlignment="Center">
-                <CheckBox Name="ShowLocal" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" VerticalAlignment="Center" />
-                <Border Background="{StaticResource ScopeLBrush}" Style="{StaticResource PillBox}" Margin="6,0,4,0">
-                    <TextBlock Text="L" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
-                </Border>
-                <TextBlock Name="ShowLocalLabel" VerticalAlignment="Center" Text="Local" />
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Margin="10,2,0,2" VerticalAlignment="Center">
-                <CheckBox Name="ShowRemote" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" VerticalAlignment="Center" />
-                <Border Background="{StaticResource ScopeRBrush}" Style="{StaticResource PillBox}" Margin="6,0,4,0">
-                    <TextBlock Text="R" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
-                </Border>
-                <TextBlock Name="ShowRemoteLabel" VerticalAlignment="Center" Text="Remote" />
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Margin="10,2,0,2" VerticalAlignment="Center">
-                <CheckBox Name="ShowMain" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" VerticalAlignment="Center" />
-                <Border Background="{StaticResource ScopeMBrush}" Style="{StaticResource PillBox}" Margin="6,0,4,0">
-                    <TextBlock Text="B" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
-                </Border>
-                <TextBlock Name="ShowMainLabel" VerticalAlignment="Center" Text="Base" />
-            </StackPanel>
-        </WrapPanel>
+        </Expander>
 
         <Grid Grid.Row="3" Margin="6">
             <Grid.ColumnDefinitions>
@@ -491,6 +501,8 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <ProgressBar Name="BusyIndicator" Grid.Column="0" Width="80" Height="18" VerticalAlignment="Center" Visibility="Collapsed" IsIndeterminate="True" />
+                    <TextBlock Name="RefreshReasonText" Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource {x:Static vsshell:VsBrushes.CommandBarTextInactiveKey}}" />
                     <TextBlock Name="LastRefreshText" Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
                                Foreground="{DynamicResource {x:Static vsshell:VsBrushes.CommandBarTextInactiveKey}}" />
                 </Grid>
