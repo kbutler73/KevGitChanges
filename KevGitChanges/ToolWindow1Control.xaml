@@ -420,7 +420,7 @@
                         <TextBlock Name="ShowRemoteLabel" VerticalAlignment="Center" Text="Remote" />
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,2,0,2" VerticalAlignment="Center">
-                        <CheckBox Name="ShowMain" IsChecked="True" Checked="FilterChanged" Unchecked="FilterChanged" VerticalAlignment="Center" />
+                        <CheckBox Name="ShowMain" IsChecked="False" Checked="FilterChanged" Unchecked="FilterChanged" VerticalAlignment="Center" />
                         <Border Background="{StaticResource ScopeMBrush}" Style="{StaticResource PillBox}" Margin="6,0,4,0">
                             <TextBlock Text="B" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
                         </Border>
@@ -445,7 +445,7 @@
                     <TextBlock FontWeight="Bold" VerticalAlignment="Center">Changes</TextBlock>
                     <TextBlock Name="LocalCount" Margin="8,0,0,0" VerticalAlignment="Center" Foreground="Gray">(0)</TextBlock>
                 </StackPanel>
-                <TreeView Name="LocalTree" Grid.Row="1" Margin="0,6,0,0" PreviewMouseRightButtonDown="TreeView_PreviewMouseRightButtonDown" ContextMenuOpening="LocalTree_ContextMenuOpening"
+                <TreeView Name="LocalTree" Grid.Row="1" Margin="0,6,0,0" PreviewMouseRightButtonDown="TreeView_PreviewMouseRightButtonDown" MouseDoubleClick="LocalTree_MouseDoubleClick" ContextMenuOpening="LocalTree_ContextMenuOpening"
                           Grid.IsSharedSizeScope="True"
                           ScrollViewer.VerticalScrollBarVisibility="Auto"
                           ScrollViewer.CanContentScroll="True"

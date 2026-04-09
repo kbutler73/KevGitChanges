@@ -108,6 +108,7 @@ namespace KevGitChanges
             }
 
             currentRepoRoot = ResolveRepoRoot(currentWorkDir);
+            ApplySavedAutoRefreshSetting(currentRepoRoot);
 
             EnsureOutputPane();
             EnsureIcons();
@@ -632,7 +633,7 @@ namespace KevGitChanges
             if (string.IsNullOrWhiteSpace(repoRoot) || string.IsNullOrWhiteSpace(branch) || IsLoadingLabel(branch)) return;
             try
             {
-                var file = GetRepoSettingsPath(repoRoot);
+                var file = GetRepoSettingsPath(repoRoot, "basebranch");
                 var dir = System.IO.Path.GetDirectoryName(file);
                 if (!System.IO.Directory.Exists(dir)) System.IO.Directory.CreateDirectory(dir);
                 System.IO.File.WriteAllText(file, branch);
@@ -645,7 +646,7 @@ namespace KevGitChanges
             try
             {
                 if (string.IsNullOrWhiteSpace(repoRoot)) return null;
-                var file = GetRepoSettingsPath(repoRoot);
+                var file = GetRepoSettingsPath(repoRoot, "basebranch");
                 if (System.IO.File.Exists(file))
                 {
                     var txt = System.IO.File.ReadAllText(file);
@@ -656,7 +657,51 @@ namespace KevGitChanges
             return null;
         }
 
-        private static string GetRepoSettingsPath(string repoRoot)
+        private void SaveAutoRefreshSetting(string repoRoot, bool isEnabled)
+        {
+            if (string.IsNullOrWhiteSpace(repoRoot)) return;
+            try
+            {
+                var file = GetRepoSettingsPath(repoRoot, "autorefresh");
+                var dir = System.IO.Path.GetDirectoryName(file);
+                if (!System.IO.Directory.Exists(dir)) System.IO.Directory.CreateDirectory(dir);
+                System.IO.File.WriteAllText(file, isEnabled ? "1" : "0");
+            }
+            catch { }
+        }
+
+        private bool? LoadAutoRefreshSetting(string repoRoot)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(repoRoot)) return null;
+                var file = GetRepoSettingsPath(repoRoot, "autorefresh");
+                if (!System.IO.File.Exists(file)) return null;
+                var txt = System.IO.File.ReadAllText(file);
+                if (string.IsNullOrWhiteSpace(txt)) return null;
+                txt = txt.Trim();
+                if (txt == "1") return true;
+                if (txt == "0") return false;
+                if (bool.TryParse(txt, out var value)) return value;
+            }
+            catch { }
+            return null;
+        }
+
+        private void ApplySavedAutoRefreshSetting(string repoRoot)
+        {
+            try
+            {
+                var saved = LoadAutoRefreshSetting(repoRoot);
+                if (saved.HasValue && AutoRefreshCheckBox != null)
+                {
+                    AutoRefreshCheckBox.IsChecked = saved.Value;
+                }
+            }
+            catch { }
+        }
+
+        private static string GetRepoSettingsPath(string repoRoot, string settingName)
         {
             var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
             var dir = System.IO.Path.Combine(appData, "KevGitChanges");
@@ -664,7 +709,8 @@ namespace KevGitChanges
             var hash = ComputeSha1(key);
             var repoName = System.IO.Path.GetFileName(repoRoot.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar));
             repoName = SanitizeFileName(string.IsNullOrWhiteSpace(repoName) ? "repo" : repoName);
-            return System.IO.Path.Combine(dir, $"{repoName}.{hash}.basebranch");
+            var suffix = SanitizeFileName(string.IsNullOrWhiteSpace(settingName) ? "setting" : settingName);
+            return System.IO.Path.Combine(dir, $"{repoName}.{hash}.{suffix}");
         }
 
         private static string ComputeSha1(string input)
@@ -698,6 +744,7 @@ namespace KevGitChanges
 
         private void AutoRefreshCheckBox_Changed(object sender, RoutedEventArgs e)
         {
+            SaveAutoRefreshSetting(currentRepoRoot, AutoRefreshCheckBox?.IsChecked == true);
             RefreshAutoRefreshSubscriptions();
         }
 
@@ -1795,6 +1842,23 @@ namespace KevGitChanges
             {
                 e.Handled = true;
             }
+        }
+
+        private void LocalTree_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+        {
+            try
+            {
+                var dep = e.OriginalSource as DependencyObject;
+                var item = FindAncestor<TreeViewItem>(dep);
+                if (item?.DataContext is TreeNode node && node.IsFile && !string.IsNullOrWhiteSpace(node.FullPath))
+                {
+                    item.IsSelected = true;
+                    item.Focus();
+                    CompareScopes(node.FullPath, "Workspace", "Base");
+                    e.Handled = true;
+                }
+            }
+            catch { }
         }
 
         private static T FindAncestor<T>(DependencyObject current) where T : DependencyObject
