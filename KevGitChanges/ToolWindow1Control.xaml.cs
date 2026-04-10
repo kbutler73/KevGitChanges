@@ -29,6 +29,8 @@ namespace KevGitChanges
         private const string selectedRemote = "origin";
         private const string LoadingLabel = "Loading...";
         private EnvDTE.SolutionEvents solutionEvents;
+        private EnvDTE.BuildEvents buildEvents;
+        private EnvDTE.DebuggerEvents debuggerEvents;
         private ImageSource folderIcon;
         private ImageSource fileIcon;
         private bool showWorkspace = true;
@@ -48,8 +50,12 @@ namespace KevGitChanges
         private bool refreshPending;
         private string pendingRefreshReason = "Initial load";
         private string lastRefreshReason = string.Empty;
+        private string deferredAutoRefreshReason;
         private DateTime lastRefreshUtc = DateTime.MinValue;
         private DateTime suppressGitMetadataEventsUntilUtc = DateTime.MinValue;
+        private bool isVsBuildActive;
+        private bool isVsDebugActive;
+        private bool autoRefreshDeferredByVsState;
         private static readonly TimeSpan WorkspaceRefreshDebounce = TimeSpan.FromMilliseconds(900);
         private static readonly TimeSpan PeriodicRefreshCheckInterval = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan PeriodicRefreshThreshold = TimeSpan.FromMinutes(10);
@@ -124,6 +130,7 @@ namespace KevGitChanges
             EnsureOutputPane();
             EnsureIcons();
             WriteOutput("Icon diagnostics: EnsureIcons invoked on load.");
+            EnsureVsActivityHooks();
             UpdateLastRefreshDisplay();
             EnsureAutoRefreshInfrastructure();
             RefreshAutoRefreshSubscriptions();
@@ -186,6 +193,7 @@ namespace KevGitChanges
 
         private void ToolWindow1Control_Unloaded(object sender, RoutedEventArgs e)
         {
+            UnhookVsActivityEvents();
             StopAutoRefreshInfrastructure();
         }
 
@@ -915,6 +923,144 @@ namespace KevGitChanges
             RefreshAutoRefreshSubscriptions();
         }
 
+        private void EnsureVsActivityHooks()
+        {
+            try
+            {
+                var dte = Microsoft.VisualStudio.Shell.Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+                if (dte == null) return;
+
+                if (buildEvents == null)
+                {
+                    buildEvents = dte.Events.BuildEvents;
+                    buildEvents.OnBuildBegin += BuildEvents_OnBuildBegin;
+                    buildEvents.OnBuildDone += BuildEvents_OnBuildDone;
+                }
+
+                if (debuggerEvents == null)
+                {
+                    debuggerEvents = dte.Events.DebuggerEvents;
+                    debuggerEvents.OnEnterRunMode += DebuggerEvents_OnEnterRunMode;
+                    debuggerEvents.OnEnterBreakMode += DebuggerEvents_OnEnterBreakMode;
+                    debuggerEvents.OnEnterDesignMode += DebuggerEvents_OnEnterDesignMode;
+                }
+
+                UpdateVsActivityState();
+            }
+            catch { }
+        }
+
+        private void UnhookVsActivityEvents()
+        {
+            try
+            {
+                if (buildEvents != null)
+                {
+                    buildEvents.OnBuildBegin -= BuildEvents_OnBuildBegin;
+                    buildEvents.OnBuildDone -= BuildEvents_OnBuildDone;
+                    buildEvents = null;
+                }
+            }
+            catch { }
+
+            try
+            {
+                if (debuggerEvents != null)
+                {
+                    debuggerEvents.OnEnterRunMode -= DebuggerEvents_OnEnterRunMode;
+                    debuggerEvents.OnEnterBreakMode -= DebuggerEvents_OnEnterBreakMode;
+                    debuggerEvents.OnEnterDesignMode -= DebuggerEvents_OnEnterDesignMode;
+                    debuggerEvents = null;
+                }
+            }
+            catch { }
+        }
+
+        private void BuildEvents_OnBuildBegin(EnvDTE.vsBuildScope Scope, EnvDTE.vsBuildAction Action)
+        {
+            isVsBuildActive = true;
+        }
+
+        private void BuildEvents_OnBuildDone(EnvDTE.vsBuildScope Scope, EnvDTE.vsBuildAction Action)
+        {
+            isVsBuildActive = false;
+            TryResumeDeferredAutoRefresh();
+        }
+
+        private void DebuggerEvents_OnEnterRunMode(EnvDTE.dbgEventReason Reason)
+        {
+            isVsDebugActive = true;
+        }
+
+        private void DebuggerEvents_OnEnterBreakMode(EnvDTE.dbgEventReason Reason, ref EnvDTE.dbgExecutionAction ExecutionAction)
+        {
+            isVsDebugActive = true;
+        }
+
+        private void DebuggerEvents_OnEnterDesignMode(EnvDTE.dbgEventReason Reason)
+        {
+            isVsDebugActive = false;
+            TryResumeDeferredAutoRefresh();
+        }
+
+        private void UpdateVsActivityState()
+        {
+            try
+            {
+                var dte = Microsoft.VisualStudio.Shell.Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+                if (dte == null) return;
+
+                try
+                {
+                    isVsBuildActive = dte.Solution?.SolutionBuild?.BuildState == EnvDTE.vsBuildState.vsBuildStateInProgress;
+                }
+                catch { }
+
+                try
+                {
+                    isVsDebugActive = dte.Debugger != null && dte.Debugger.CurrentMode != EnvDTE.dbgDebugMode.dbgDesignMode;
+                }
+                catch { }
+            }
+            catch { }
+        }
+
+        private bool IsAutoRefreshBlockedByVsActivity()
+        {
+            UpdateVsActivityState();
+            return isVsBuildActive || isVsDebugActive;
+        }
+
+        private bool TryStartAutoRefresh(string reason)
+        {
+            if (IsAutoRefreshBlockedByVsActivity())
+            {
+                autoRefreshDeferredByVsState = true;
+                deferredAutoRefreshReason = string.IsNullOrWhiteSpace(reason) ? "Auto refresh deferred" : reason;
+                UpdateRefreshReasonDisplay(isVsBuildActive ? "deferred during build" : "deferred during debug");
+                return false;
+            }
+
+            autoRefreshDeferredByVsState = false;
+            deferredAutoRefreshReason = null;
+            StartRefresh(reason);
+            return true;
+        }
+
+        private void TryResumeDeferredAutoRefresh()
+        {
+            Dispatcher.BeginInvoke((Action)(() =>
+            {
+                if (!autoRefreshDeferredByVsState || AutoRefreshCheckBox?.IsChecked != true) return;
+                if (IsAutoRefreshBlockedByVsActivity()) return;
+
+                autoRefreshDeferredByVsState = false;
+                var reason = string.IsNullOrWhiteSpace(deferredAutoRefreshReason) ? "Deferred auto refresh" : deferredAutoRefreshReason;
+                deferredAutoRefreshReason = null;
+                StartRefresh(reason);
+            }));
+        }
+
         private void UpdateLastRefreshDisplay()
         {
             if (LastRefreshText == null) return;
@@ -1067,6 +1213,13 @@ namespace KevGitChanges
             Dispatcher.BeginInvoke((Action)(() =>
             {
                 if (!IsLoaded || !IsVisible) return;
+                if (IsAutoRefreshBlockedByVsActivity())
+                {
+                    autoRefreshDeferredByVsState = true;
+                    deferredAutoRefreshReason = string.IsNullOrWhiteSpace(reason) ? "File change" : reason;
+                    UpdateRefreshReasonDisplay(isVsBuildActive ? "deferred during build" : "deferred during debug");
+                    return;
+                }
                 EnsureAutoRefreshInfrastructure();
                 pendingRefreshReason = string.IsNullOrWhiteSpace(reason) ? "File change" : reason;
                 UpdateRefreshReasonDisplay(pendingRefreshReason);
@@ -1078,14 +1231,14 @@ namespace KevGitChanges
         private void WorkspaceRefreshDebounceTimer_Tick(object sender, EventArgs e)
         {
             workspaceRefreshDebounceTimer.Stop();
-            StartRefresh();
+            TryStartAutoRefresh(pendingRefreshReason);
         }
 
         private void PeriodicRefreshTimer_Tick(object sender, EventArgs e)
         {
             if (!IsLoaded || !IsVisible || refreshInProgress) return;
             if (lastRefreshUtc != DateTime.MinValue && (DateTime.UtcNow - lastRefreshUtc) < PeriodicRefreshThreshold) return;
-            StartRefresh("Periodic");
+            TryStartAutoRefresh("Periodic");
         }
 
         private bool ShouldIgnoreWorkspacePath(string fullPath)
