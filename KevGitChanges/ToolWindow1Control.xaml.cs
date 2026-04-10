@@ -4,6 +4,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Runtime.InteropServices;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -27,12 +29,13 @@ namespace KevGitChanges
         private const string selectedRemote = "origin";
         private const string LoadingLabel = "Loading...";
         private EnvDTE.SolutionEvents solutionEvents;
+        private EnvDTE.BuildEvents buildEvents;
+        private EnvDTE.DebuggerEvents debuggerEvents;
         private ImageSource folderIcon;
         private ImageSource fileIcon;
         private bool showWorkspace = true;
         private bool showLocal = true;
         private bool showRemote = true;
-        private bool showMain = true;
         private IVsOutputWindowPane outputPane;
         private static readonly Guid OutputPaneGuid = new Guid("1C6450F7-14B0-4D9D-8C41-9B2D95C0F4D2");
         private bool ignoreCheckoutSelection;
@@ -47,11 +50,25 @@ namespace KevGitChanges
         private bool refreshPending;
         private string pendingRefreshReason = "Initial load";
         private string lastRefreshReason = string.Empty;
+        private string deferredAutoRefreshReason;
         private DateTime lastRefreshUtc = DateTime.MinValue;
         private DateTime suppressGitMetadataEventsUntilUtc = DateTime.MinValue;
+        private bool isVsBuildActive;
+        private bool isVsDebugActive;
+        private bool autoRefreshDeferredByVsState;
         private static readonly TimeSpan WorkspaceRefreshDebounce = TimeSpan.FromMilliseconds(900);
         private static readonly TimeSpan PeriodicRefreshCheckInterval = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan PeriodicRefreshThreshold = TimeSpan.FromMinutes(10);
+
+        [DataContract]
+        private class RepoSettings
+        {
+            [DataMember(Name = "baseBranch", EmitDefaultValue = false)]
+            public string BaseBranch { get; set; }
+
+            [DataMember(Name = "autoRefreshEnabled", EmitDefaultValue = false)]
+            public bool? AutoRefreshEnabled { get; set; }
+        }
 
         private readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> scopeMap =
             new System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>>(System.StringComparer.OrdinalIgnoreCase);
@@ -108,10 +125,12 @@ namespace KevGitChanges
             }
 
             currentRepoRoot = ResolveRepoRoot(currentWorkDir);
+            ApplySavedAutoRefreshSetting(currentRepoRoot);
 
             EnsureOutputPane();
             EnsureIcons();
             WriteOutput("Icon diagnostics: EnsureIcons invoked on load.");
+            EnsureVsActivityHooks();
             UpdateLastRefreshDisplay();
             EnsureAutoRefreshInfrastructure();
             RefreshAutoRefreshSubscriptions();
@@ -174,6 +193,7 @@ namespace KevGitChanges
 
         private void ToolWindow1Control_Unloaded(object sender, RoutedEventArgs e)
         {
+            UnhookVsActivityEvents();
             StopAutoRefreshInfrastructure();
         }
 
@@ -381,7 +401,11 @@ namespace KevGitChanges
                     // show chosen base branch in UI
                     currentWorkDir = workDir;
                     currentRepoRoot = ResolveRepoRoot(workDir);
-                    Dispatcher.Invoke(() => RefreshAutoRefreshSubscriptions());
+                    Dispatcher.Invoke(() =>
+                    {
+                        ApplySavedAutoRefreshSetting(currentRepoRoot);
+                        RefreshAutoRefreshSubscriptions();
+                    });
                     currentBaseBranch = baseBranch;
 
                     // If BaseBranchCombo has selection prefer that as the base branch
@@ -461,7 +485,7 @@ namespace KevGitChanges
                 // persist selection for this repo
                 try
                 {
-                    SaveSelectedBaseBranch(currentWorkDir, sel);
+                    SaveSelectedBaseBranch(currentRepoRoot ?? currentWorkDir, sel);
                 }
                 catch { }
             }
@@ -632,10 +656,9 @@ namespace KevGitChanges
             if (string.IsNullOrWhiteSpace(repoRoot) || string.IsNullOrWhiteSpace(branch) || IsLoadingLabel(branch)) return;
             try
             {
-                var file = GetRepoSettingsPath(repoRoot);
-                var dir = System.IO.Path.GetDirectoryName(file);
-                if (!System.IO.Directory.Exists(dir)) System.IO.Directory.CreateDirectory(dir);
-                System.IO.File.WriteAllText(file, branch);
+                var settings = LoadRepoSettings(repoRoot) ?? new RepoSettings();
+                settings.BaseBranch = branch;
+                SaveRepoSettings(repoRoot, settings);
             }
             catch { }
         }
@@ -644,27 +667,202 @@ namespace KevGitChanges
         {
             try
             {
-                if (string.IsNullOrWhiteSpace(repoRoot)) return null;
-                var file = GetRepoSettingsPath(repoRoot);
-                if (System.IO.File.Exists(file))
-                {
-                    var txt = System.IO.File.ReadAllText(file);
-                    return string.IsNullOrWhiteSpace(txt) ? null : txt.Trim();
-                }
+                var settings = LoadRepoSettings(repoRoot);
+                return string.IsNullOrWhiteSpace(settings?.BaseBranch) ? null : settings.BaseBranch.Trim();
             }
             catch { }
             return null;
+        }
+
+        private void SaveAutoRefreshSetting(string repoRoot, bool isEnabled)
+        {
+            if (string.IsNullOrWhiteSpace(repoRoot)) return;
+            try
+            {
+                var settings = LoadRepoSettings(repoRoot) ?? new RepoSettings();
+                settings.AutoRefreshEnabled = isEnabled;
+                SaveRepoSettings(repoRoot, settings);
+            }
+            catch { }
+        }
+
+        private bool? LoadAutoRefreshSetting(string repoRoot)
+        {
+            try
+            {
+                return LoadRepoSettings(repoRoot)?.AutoRefreshEnabled;
+            }
+            catch { }
+            return null;
+        }
+
+        private void ApplySavedAutoRefreshSetting(string repoRoot)
+        {
+            try
+            {
+                var saved = LoadAutoRefreshSetting(repoRoot);
+                if (saved.HasValue && AutoRefreshCheckBox != null)
+                {
+                    AutoRefreshCheckBox.IsChecked = saved.Value;
+                }
+            }
+            catch { }
+        }
+
+        private RepoSettings LoadRepoSettings(string repoRoot)
+        {
+            try
+            {
+                var file = GetRepoSettingsPath(repoRoot);
+                if (System.IO.File.Exists(file))
+                {
+                    using (var stream = System.IO.File.OpenRead(file))
+                    {
+                        var serializer = new DataContractJsonSerializer(typeof(RepoSettings));
+                        return serializer.ReadObject(stream) as RepoSettings;
+                    }
+                }
+            }
+            catch
+            {
+                // fall back to legacy migration
+            }
+
+            return TryMigrateLegacyRepoSettings(repoRoot);
+        }
+
+        private void SaveRepoSettings(string repoRoot, RepoSettings settings)
+        {
+            if (string.IsNullOrWhiteSpace(repoRoot) || settings == null) return;
+            try
+            {
+                var file = GetRepoSettingsPath(repoRoot);
+                var dir = System.IO.Path.GetDirectoryName(file);
+                if (!System.IO.Directory.Exists(dir)) System.IO.Directory.CreateDirectory(dir);
+                using (var stream = System.IO.File.Create(file))
+                {
+                    var serializer = new DataContractJsonSerializer(typeof(RepoSettings));
+                    serializer.WriteObject(stream, settings);
+                }
+            }
+            catch { }
+        }
+
+        private RepoSettings TryMigrateLegacyRepoSettings(string repoRoot)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(repoRoot)) return null;
+                var settings = new RepoSettings();
+                var hasAny = false;
+
+                var baseBranch = LoadLegacyBaseBranchSetting(repoRoot);
+                if (!string.IsNullOrWhiteSpace(baseBranch))
+                {
+                    settings.BaseBranch = baseBranch;
+                    hasAny = true;
+                }
+
+                var autoRefresh = LoadLegacyAutoRefreshSetting(repoRoot);
+                if (autoRefresh.HasValue)
+                {
+                    settings.AutoRefreshEnabled = autoRefresh.Value;
+                    hasAny = true;
+                }
+
+                if (!hasAny) return null;
+
+                SaveRepoSettings(repoRoot, settings);
+                DeleteLegacyRepoSettings(repoRoot);
+                return settings;
+            }
+            catch { }
+            return null;
+        }
+
+        private string LoadLegacyBaseBranchSetting(string repoRoot)
+        {
+            try
+            {
+                var file = GetLegacyRepoSettingsPath(repoRoot, "basebranch");
+                if (!System.IO.File.Exists(file)) return null;
+                var txt = System.IO.File.ReadAllText(file);
+                return string.IsNullOrWhiteSpace(txt) ? null : txt.Trim();
+            }
+            catch { }
+            return null;
+        }
+
+        private bool? LoadLegacyAutoRefreshSetting(string repoRoot)
+        {
+            try
+            {
+                var file = GetLegacyRepoSettingsPath(repoRoot, "autorefresh");
+                if (!System.IO.File.Exists(file)) return null;
+                var txt = System.IO.File.ReadAllText(file);
+                if (string.IsNullOrWhiteSpace(txt)) return null;
+                txt = txt.Trim();
+                if (txt == "1") return true;
+                if (txt == "0") return false;
+                if (bool.TryParse(txt, out var value)) return value;
+            }
+            catch { }
+            return null;
+        }
+
+        private void DeleteLegacyRepoSettings(string repoRoot)
+        {
+            try
+            {
+                var baseFile = GetLegacyRepoSettingsPath(repoRoot, "basebranch");
+                if (System.IO.File.Exists(baseFile)) System.IO.File.Delete(baseFile);
+            }
+            catch { }
+
+            try
+            {
+                var autoFile = GetLegacyRepoSettingsPath(repoRoot, "autorefresh");
+                if (System.IO.File.Exists(autoFile)) System.IO.File.Delete(autoFile);
+            }
+            catch { }
         }
 
         private static string GetRepoSettingsPath(string repoRoot)
         {
             var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
             var dir = System.IO.Path.Combine(appData, "KevGitChanges");
-            var key = repoRoot.Trim().ToLowerInvariant();
+            var normalizedRoot = NormalizeRepoSettingsKey(repoRoot);
+            var key = normalizedRoot.ToLowerInvariant();
             var hash = ComputeSha1(key);
-            var repoName = System.IO.Path.GetFileName(repoRoot.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar));
+            var repoName = System.IO.Path.GetFileName(normalizedRoot.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar));
             repoName = SanitizeFileName(string.IsNullOrWhiteSpace(repoName) ? "repo" : repoName);
-            return System.IO.Path.Combine(dir, $"{repoName}.{hash}.basebranch");
+            return System.IO.Path.Combine(dir, $"{repoName}.{hash}.settings.json");
+        }
+
+        private static string GetLegacyRepoSettingsPath(string repoRoot, string settingName)
+        {
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            var dir = System.IO.Path.Combine(appData, "KevGitChanges");
+            var normalizedRoot = NormalizeRepoSettingsKey(repoRoot);
+            var key = normalizedRoot.ToLowerInvariant();
+            var hash = ComputeSha1(key);
+            var repoName = System.IO.Path.GetFileName(normalizedRoot.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar));
+            repoName = SanitizeFileName(string.IsNullOrWhiteSpace(repoName) ? "repo" : repoName);
+            var suffix = SanitizeFileName(string.IsNullOrWhiteSpace(settingName) ? "setting" : settingName);
+            return System.IO.Path.Combine(dir, $"{repoName}.{hash}.{suffix}");
+        }
+
+        private static string NormalizeRepoSettingsKey(string repoRoot)
+        {
+            if (string.IsNullOrWhiteSpace(repoRoot)) return string.Empty;
+            try
+            {
+                return ResolveRepoRootStatic(repoRoot) ?? repoRoot.Trim();
+            }
+            catch
+            {
+                return repoRoot.Trim();
+            }
         }
 
         private static string ComputeSha1(string input)
@@ -696,9 +894,171 @@ namespace KevGitChanges
             StartRefresh("Manual");
         }
 
+        private static string ResolveRepoRootStatic(string workDir)
+        {
+            if (string.IsNullOrWhiteSpace(workDir)) return null;
+            try
+            {
+                var dir = new System.IO.DirectoryInfo(workDir);
+                if (!dir.Exists) return workDir;
+                while (dir != null)
+                {
+                    if (System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, ".git")))
+                    {
+                        return dir.FullName;
+                    }
+                    dir = dir.Parent;
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+            return workDir;
+        }
+
         private void AutoRefreshCheckBox_Changed(object sender, RoutedEventArgs e)
         {
+            SaveAutoRefreshSetting(currentRepoRoot, AutoRefreshCheckBox?.IsChecked == true);
             RefreshAutoRefreshSubscriptions();
+        }
+
+        private void EnsureVsActivityHooks()
+        {
+            try
+            {
+                var dte = Microsoft.VisualStudio.Shell.Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+                if (dte == null) return;
+
+                if (buildEvents == null)
+                {
+                    buildEvents = dte.Events.BuildEvents;
+                    buildEvents.OnBuildBegin += BuildEvents_OnBuildBegin;
+                    buildEvents.OnBuildDone += BuildEvents_OnBuildDone;
+                }
+
+                if (debuggerEvents == null)
+                {
+                    debuggerEvents = dte.Events.DebuggerEvents;
+                    debuggerEvents.OnEnterRunMode += DebuggerEvents_OnEnterRunMode;
+                    debuggerEvents.OnEnterBreakMode += DebuggerEvents_OnEnterBreakMode;
+                    debuggerEvents.OnEnterDesignMode += DebuggerEvents_OnEnterDesignMode;
+                }
+
+                UpdateVsActivityState();
+            }
+            catch { }
+        }
+
+        private void UnhookVsActivityEvents()
+        {
+            try
+            {
+                if (buildEvents != null)
+                {
+                    buildEvents.OnBuildBegin -= BuildEvents_OnBuildBegin;
+                    buildEvents.OnBuildDone -= BuildEvents_OnBuildDone;
+                    buildEvents = null;
+                }
+            }
+            catch { }
+
+            try
+            {
+                if (debuggerEvents != null)
+                {
+                    debuggerEvents.OnEnterRunMode -= DebuggerEvents_OnEnterRunMode;
+                    debuggerEvents.OnEnterBreakMode -= DebuggerEvents_OnEnterBreakMode;
+                    debuggerEvents.OnEnterDesignMode -= DebuggerEvents_OnEnterDesignMode;
+                    debuggerEvents = null;
+                }
+            }
+            catch { }
+        }
+
+        private void BuildEvents_OnBuildBegin(EnvDTE.vsBuildScope Scope, EnvDTE.vsBuildAction Action)
+        {
+            isVsBuildActive = true;
+        }
+
+        private void BuildEvents_OnBuildDone(EnvDTE.vsBuildScope Scope, EnvDTE.vsBuildAction Action)
+        {
+            isVsBuildActive = false;
+            TryResumeDeferredAutoRefresh();
+        }
+
+        private void DebuggerEvents_OnEnterRunMode(EnvDTE.dbgEventReason Reason)
+        {
+            isVsDebugActive = true;
+        }
+
+        private void DebuggerEvents_OnEnterBreakMode(EnvDTE.dbgEventReason Reason, ref EnvDTE.dbgExecutionAction ExecutionAction)
+        {
+            isVsDebugActive = true;
+        }
+
+        private void DebuggerEvents_OnEnterDesignMode(EnvDTE.dbgEventReason Reason)
+        {
+            isVsDebugActive = false;
+            TryResumeDeferredAutoRefresh();
+        }
+
+        private void UpdateVsActivityState()
+        {
+            try
+            {
+                var dte = Microsoft.VisualStudio.Shell.Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+                if (dte == null) return;
+
+                try
+                {
+                    isVsBuildActive = dte.Solution?.SolutionBuild?.BuildState == EnvDTE.vsBuildState.vsBuildStateInProgress;
+                }
+                catch { }
+
+                try
+                {
+                    isVsDebugActive = dte.Debugger != null && dte.Debugger.CurrentMode != EnvDTE.dbgDebugMode.dbgDesignMode;
+                }
+                catch { }
+            }
+            catch { }
+        }
+
+        private bool IsAutoRefreshBlockedByVsActivity()
+        {
+            UpdateVsActivityState();
+            return isVsBuildActive || isVsDebugActive;
+        }
+
+        private bool TryStartAutoRefresh(string reason)
+        {
+            if (IsAutoRefreshBlockedByVsActivity())
+            {
+                autoRefreshDeferredByVsState = true;
+                deferredAutoRefreshReason = string.IsNullOrWhiteSpace(reason) ? "Auto refresh deferred" : reason;
+                UpdateRefreshReasonDisplay(isVsBuildActive ? "deferred during build" : "deferred during debug");
+                return false;
+            }
+
+            autoRefreshDeferredByVsState = false;
+            deferredAutoRefreshReason = null;
+            StartRefresh(reason);
+            return true;
+        }
+
+        private void TryResumeDeferredAutoRefresh()
+        {
+            Dispatcher.BeginInvoke((Action)(() =>
+            {
+                if (!autoRefreshDeferredByVsState || AutoRefreshCheckBox?.IsChecked != true) return;
+                if (IsAutoRefreshBlockedByVsActivity()) return;
+
+                autoRefreshDeferredByVsState = false;
+                var reason = string.IsNullOrWhiteSpace(deferredAutoRefreshReason) ? "Deferred auto refresh" : deferredAutoRefreshReason;
+                deferredAutoRefreshReason = null;
+                StartRefresh(reason);
+            }));
         }
 
         private void UpdateLastRefreshDisplay()
@@ -853,6 +1213,13 @@ namespace KevGitChanges
             Dispatcher.BeginInvoke((Action)(() =>
             {
                 if (!IsLoaded || !IsVisible) return;
+                if (IsAutoRefreshBlockedByVsActivity())
+                {
+                    autoRefreshDeferredByVsState = true;
+                    deferredAutoRefreshReason = string.IsNullOrWhiteSpace(reason) ? "File change" : reason;
+                    UpdateRefreshReasonDisplay(isVsBuildActive ? "deferred during build" : "deferred during debug");
+                    return;
+                }
                 EnsureAutoRefreshInfrastructure();
                 pendingRefreshReason = string.IsNullOrWhiteSpace(reason) ? "File change" : reason;
                 UpdateRefreshReasonDisplay(pendingRefreshReason);
@@ -864,14 +1231,14 @@ namespace KevGitChanges
         private void WorkspaceRefreshDebounceTimer_Tick(object sender, EventArgs e)
         {
             workspaceRefreshDebounceTimer.Stop();
-            StartRefresh();
+            TryStartAutoRefresh(pendingRefreshReason);
         }
 
         private void PeriodicRefreshTimer_Tick(object sender, EventArgs e)
         {
             if (!IsLoaded || !IsVisible || refreshInProgress) return;
             if (lastRefreshUtc != DateTime.MinValue && (DateTime.UtcNow - lastRefreshUtc) < PeriodicRefreshThreshold) return;
-            StartRefresh("Periodic");
+            TryStartAutoRefresh("Periodic");
         }
 
         private bool ShouldIgnoreWorkspacePath(string fullPath)
@@ -1089,12 +1456,11 @@ namespace KevGitChanges
                     showWorkspace = ShowWorkspace == null || ShowWorkspace.IsChecked == true;
                     showLocal = ShowLocal == null || ShowLocal.IsChecked == true;
                     showRemote = ShowRemote == null || ShowRemote.IsChecked == true;
-                    showMain = ShowMain == null || ShowMain.IsChecked == true;
                 });
             }
             catch
             {
-                showWorkspace = showLocal = showRemote = showMain = true;
+                showWorkspace = showLocal = showRemote = true;
             }
         }
 
@@ -1180,12 +1546,6 @@ namespace KevGitChanges
                 item.RStatus = rStatus;
                 any = true;
             }
-            if (ShouldShowScope(ChangeScope.Main) && scopes.TryGetValue(ChangeScope.Main, out var mStatus))
-            {
-                item.MStatus = mStatus;
-                any = true;
-            }
-
             return any ? item : null;
         }
 
@@ -1259,9 +1619,6 @@ namespace KevGitChanges
 
                 case ChangeScope.Remote:
                     return showRemote;
-
-                case ChangeScope.Main:
-                    return showMain;
 
                 default:
                     return true;
@@ -1702,43 +2059,9 @@ namespace KevGitChanges
 
         private void CompareWithBase_Click(object sender, RoutedEventArgs e)
         {
-            string file = null;
-            try
-            {
-                if (LocalTree.SelectedItem is TreeNode lnode && !string.IsNullOrWhiteSpace(lnode.FullPath)) file = lnode.FullPath;
-            }
-            catch { }
+            var file = GetSelectedFile();
             if (string.IsNullOrWhiteSpace(file)) return;
-
-            if (string.IsNullOrWhiteSpace(currentWorkDir) || string.IsNullOrWhiteSpace(currentBaseBranch))
-            {
-                UpdateStatus("Repository or base branch unknown.");
-                return;
-            }
-
-            var validationError = GetCompareValidationError(file, "Workspace", null, "Base", currentBaseBranch);
-            if (!string.IsNullOrWhiteSpace(validationError))
-            {
-                UpdateStatus(validationError);
-                return;
-            }
-
-            // launch git difftool for the file between base branch and working branch
-            var gitFile = ToWorkDirRelativeGitPath(file);
-            var args = $"difftool {currentBaseBranch} -- \"{gitFile}\"";
-            try
-            {
-                var psi = new System.Diagnostics.ProcessStartInfo("git", args)
-                {
-                    UseShellExecute = true,
-                    WorkingDirectory = currentWorkDir
-                };
-                System.Diagnostics.Process.Start(psi);
-            }
-            catch (System.Exception ex)
-            {
-                UpdateStatus("Unable to launch difftool: " + ex.Message);
-            }
+            CompareScopes(file, "Workspace", "Main");
         }
 
         private void CompareSelected_Click(object sender, RoutedEventArgs e)
@@ -1795,6 +2118,26 @@ namespace KevGitChanges
             {
                 e.Handled = true;
             }
+        }
+
+        private void LocalTree_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+        {
+            try
+            {
+                var dep = e.OriginalSource as DependencyObject;
+                var item = FindAncestor<TreeViewItem>(dep);
+                if (item?.DataContext is TreeNode node && node.IsFile)
+                {
+                    item.IsSelected = true;
+                    item.Focus();
+                    if (!string.IsNullOrWhiteSpace(node.FullPath))
+                    {
+                        CompareScopes(node.FullPath, "Workspace", "Main");
+                        e.Handled = true;
+                    }
+                }
+            }
+            catch { }
         }
 
         private static T FindAncestor<T>(DependencyObject current) where T : DependencyObject
@@ -2203,7 +2546,9 @@ namespace KevGitChanges
                 WriteOutput($"  args: {args}");
                 var psi = new System.Diagnostics.ProcessStartInfo("git", args)
                 {
-                    UseShellExecute = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
                     WorkingDirectory = currentWorkDir
                 };
                 System.Diagnostics.Process.Start(psi);
@@ -2452,13 +2797,11 @@ namespace KevGitChanges
             var localLabel = GetScopeDisplay("Local");
             var remoteLabel = GetScopeDisplay("Remote");
             var mainLabel = GetScopeDisplay("Main");
-
             this.Dispatcher.Invoke(() =>
             {
                 if (ShowWorkspaceLabel != null) ShowWorkspaceLabel.Text = GetScopeFilterLabel("Workspace");
                 if (ShowLocalLabel != null) ShowLocalLabel.Text = GetScopeFilterLabel("Local");
                 if (ShowRemoteLabel != null) ShowRemoteLabel.Text = GetScopeFilterLabel("Remote");
-                if (ShowMainLabel != null) ShowMainLabel.Text = GetScopeFilterLabel("Main");
 
                 UpdateCompareCombos("Workspace", "Local");
                 UpdateCompareMenuHeader();
