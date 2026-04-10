@@ -18,7 +18,6 @@
             <SolidColorBrush x:Key="ScopeWBrush" Color="#0EA5E9" />
             <SolidColorBrush x:Key="ScopeLBrush" Color="#8B5CF6" />
             <SolidColorBrush x:Key="ScopeRBrush" Color="#F97316" />
-            <SolidColorBrush x:Key="ScopeMBrush" Color="#14B8A6" />
             <Color x:Key="FolderBiasColor">#E6C24A</Color>
             <!-- Use Visual Studio themed brushes for tree views -->
             <Style TargetType="TreeView">
@@ -96,7 +95,7 @@
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="220" />
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -104,7 +103,7 @@
                                 </Grid.RowDefinitions>
 
                                 <ContentPresenter Grid.Column="1" Panel.ZIndex="0" ContentTemplate="{DynamicResource StatusColumnsTemplate}" Content="{Binding}" HorizontalAlignment="Right" />
-                                <Border x:Name="Bd" Grid.ColumnSpan="2" Panel.ZIndex="1" Background="{TemplateBinding Background}">
+                                <Border x:Name="Bd" Grid.Column="0" Panel.ZIndex="1" Background="{TemplateBinding Background}">
                                     <Grid Margin="{Binding Depth, Converter={StaticResource TreeIndentToMargin}}">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto" />
@@ -133,7 +132,7 @@
                                         <ContentPresenter x:Name="PART_Header" Grid.Column="1" ContentSource="Header" HorizontalAlignment="Stretch" />
                                     </Grid>
                                 </Border>
-                                <ItemsPresenter x:Name="ItemsHost" Grid.Row="1" Grid.ColumnSpan="2" Visibility="Collapsed" />
+                                <ItemsPresenter x:Name="ItemsHost" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Visibility="Collapsed" />
                             </Grid>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="HasItems" Value="True">
@@ -257,16 +256,15 @@
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
-                    <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Right" Style="{StaticResource ScopeCellStyle}" Tag="{Binding WStatus}" ToolTip="{Binding WToolTip}">
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,4,0" Style="{StaticResource ScopeCellStyle}" Tag="{Binding WStatus}" ToolTip="{Binding WToolTip}">
                         <Border Background="{StaticResource ScopeWBrush}" Style="{StaticResource PillBox}">
                             <TextBlock Text="{Binding WStatus}" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
                         </Border>
                     </StackPanel>
 
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" Style="{StaticResource ScopeCellStyle}" Tag="{Binding LStatus}" ToolTip="{Binding LToolTip}">
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,4,0" Style="{StaticResource ScopeCellStyle}" Tag="{Binding LStatus}" ToolTip="{Binding LToolTip}">
                         <Border Background="{StaticResource ScopeLBrush}" Style="{StaticResource PillBox}">
                             <TextBlock Text="{Binding LStatus}" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
                         </Border>
@@ -275,12 +273,6 @@
                     <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" Style="{StaticResource ScopeCellStyle}" Tag="{Binding RStatus}" ToolTip="{Binding RToolTip}">
                         <Border Background="{StaticResource ScopeRBrush}" Style="{StaticResource PillBox}">
                             <TextBlock Text="{Binding RStatus}" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
-                        </Border>
-                    </StackPanel>
-
-                    <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Right" Style="{StaticResource ScopeCellStyle}" Tag="{Binding MStatus}" ToolTip="{Binding MToolTip}">
-                        <Border Background="{StaticResource ScopeMBrush}" Style="{StaticResource PillBox}">
-                            <TextBlock Text="{Binding MStatus}" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
                         </Border>
                     </StackPanel>
                 </Grid>
@@ -419,13 +411,6 @@
                         </Border>
                         <TextBlock Name="ShowRemoteLabel" VerticalAlignment="Center" Text="Remote" />
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,2,0,2" VerticalAlignment="Center">
-                        <CheckBox Name="ShowMain" IsChecked="False" Checked="FilterChanged" Unchecked="FilterChanged" VerticalAlignment="Center" />
-                        <Border Background="{StaticResource ScopeMBrush}" Style="{StaticResource PillBox}" Margin="6,0,4,0">
-                            <TextBlock Text="B" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
-                        </Border>
-                        <TextBlock Name="ShowMainLabel" VerticalAlignment="Center" Text="Base" />
-                    </StackPanel>
                 </StackPanel>
             </StackPanel>
         </Expander>
@@ -478,7 +463,7 @@
                                         </Style>
                                     </imaging:CrispImage.Style>
                                 </imaging:CrispImage>
-                                <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding FullPath}" />
                             </Grid>
                         </HierarchicalDataTemplate>
                     </TreeView.ItemTemplate>
