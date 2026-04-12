@@ -1,5 +1,6 @@
 ﻿using System.Threading.Tasks;
 using System;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -19,7 +20,7 @@ namespace KevGitChanges
     /// <summary>
     /// Interaction logic for ToolWindow1Control.
     /// </summary>
-    public partial class ToolWindow1Control : UserControl
+    public partial class ToolWindow1Control : UserControl, INotifyPropertyChanged
     {
         private string currentWorkDir;
         private string currentRepoRoot;
@@ -59,6 +60,9 @@ namespace KevGitChanges
         private static readonly TimeSpan WorkspaceRefreshDebounce = TimeSpan.FromMilliseconds(900);
         private static readonly TimeSpan PeriodicRefreshCheckInterval = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan PeriodicRefreshThreshold = TimeSpan.FromMinutes(10);
+        private Visibility workspaceColumnVisibility = Visibility.Visible;
+        private Visibility localColumnVisibility = Visibility.Visible;
+        private Visibility remoteColumnVisibility = Visibility.Visible;
 
         [DataContract]
         private class RepoSettings
@@ -86,6 +90,41 @@ namespace KevGitChanges
             Main
         }
 
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        public Visibility WorkspaceColumnVisibility
+        {
+            get { return workspaceColumnVisibility; }
+            private set
+            {
+                if (workspaceColumnVisibility == value) return;
+                workspaceColumnVisibility = value;
+                OnPropertyChanged(nameof(WorkspaceColumnVisibility));
+            }
+        }
+
+        public Visibility LocalColumnVisibility
+        {
+            get { return localColumnVisibility; }
+            private set
+            {
+                if (localColumnVisibility == value) return;
+                localColumnVisibility = value;
+                OnPropertyChanged(nameof(LocalColumnVisibility));
+            }
+        }
+
+        public Visibility RemoteColumnVisibility
+        {
+            get { return remoteColumnVisibility; }
+            private set
+            {
+                if (remoteColumnVisibility == value) return;
+                remoteColumnVisibility = value;
+                OnPropertyChanged(nameof(RemoteColumnVisibility));
+            }
+        }
+
         static ToolWindow1Control()
         {
             FreezeBrush(StatusAddedBrush);
@@ -103,6 +142,11 @@ namespace KevGitChanges
             this.Loaded += ToolWindow1Control_Loaded;
             this.Unloaded += ToolWindow1Control_Unloaded;
             this.IsVisibleChanged += ToolWindow1Control_IsVisibleChanged;
+        }
+
+        private void OnPropertyChanged(string propertyName)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
 
         private void ToolWindow1Control_Loaded(object sender, RoutedEventArgs e)
@@ -1422,6 +1466,7 @@ namespace KevGitChanges
         {
             var localItems = new System.Collections.Generic.List<ChangeItem>();
             CaptureFilterState();
+            UpdateStatusColumnVisibility(scopes);
 
             if (scopes != null)
             {
@@ -1623,6 +1668,28 @@ namespace KevGitChanges
                 default:
                     return true;
             }
+        }
+
+        private void UpdateStatusColumnVisibility(System.Collections.Generic.IDictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> scopes)
+        {
+            WorkspaceColumnVisibility = HasAnyVisibleScopeStatus(scopes, ChangeScope.Workspace) ? Visibility.Visible : Visibility.Collapsed;
+            LocalColumnVisibility = HasAnyVisibleScopeStatus(scopes, ChangeScope.Local) ? Visibility.Visible : Visibility.Collapsed;
+            RemoteColumnVisibility = HasAnyVisibleScopeStatus(scopes, ChangeScope.Remote) ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private bool HasAnyVisibleScopeStatus(System.Collections.Generic.IDictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> scopes, ChangeScope scope)
+        {
+            if (!ShouldShowScope(scope) || scopes == null) return false;
+            foreach (var entry in scopes.Values)
+            {
+                if (entry == null) continue;
+                if (entry.TryGetValue(scope, out var status) && !string.IsNullOrWhiteSpace(status))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private string GetMainRef(string workDir)
