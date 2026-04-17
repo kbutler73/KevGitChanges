@@ -1,7 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
     <Metadata>
-        <Identity Id="KevGitChanges.6c787bd5-1cad-465e-ade6-ef3843473045" Version="1.0.4.3" Language="en-US" Publisher="WolfThrower" />
+        <Identity Id="KevGitChanges.6c787bd5-1cad-465e-ade6-ef3843473045" Version="1.0.4.5" Language="en-US" Publisher="WolfThrower" />
         <DisplayName>Kev Git Changes</DisplayName>
         <Description xml:space="preserve">Shows local files changed but not yet in the remote branch.</Description>
     </Metadata>
@@ -19,5 +19,6 @@
     </Prerequisites>
     <Assets>
         <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%;PkgdefProjectOutputGroup|" />
+        <Asset Type="Microsoft.VisualStudio.MefComponent" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%|" />
     </Assets>
 </PackageManifest>
