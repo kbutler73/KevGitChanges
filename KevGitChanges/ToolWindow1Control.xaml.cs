@@ -2683,7 +2683,6 @@ namespace KevGitChanges
             exitCode = -1;
             try
             {
-                WriteOutput($"git {arguments}");
                 var psi = new System.Diagnostics.ProcessStartInfo("git", arguments)
                 {
                     RedirectStandardOutput = true,
@@ -2715,9 +2714,11 @@ namespace KevGitChanges
         private void WriteOutput(string line)
         {
             if (string.IsNullOrWhiteSpace(line)) return;
-            if (line.StartsWith("Icon diagnostics:", StringComparison.OrdinalIgnoreCase))
+            if (line.StartsWith("Icon diagnostics:", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Compare diagnostics", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("git ", StringComparison.OrdinalIgnoreCase))
             {
-                lastIconDiagnostics = line;
+                return;
             }
             try
             {
