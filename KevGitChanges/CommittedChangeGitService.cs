@@ -28,6 +28,15 @@ namespace KevGitChanges
         private const string SelectedRemote = "origin";
         private static readonly Regex HunkRegex = new Regex(@"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", RegexOptions.Compiled);
 
+        internal sealed class BaseFileSnapshot
+        {
+            public string RepoRoot { get; set; }
+            public string RelativePath { get; set; }
+            public string BaseRef { get; set; }
+            public string Content { get; set; }
+            public bool ExistsInBase { get; set; }
+        }
+
         [DataContract]
         private sealed class RepoSettings
         {
@@ -116,6 +125,68 @@ namespace KevGitChanges
 
             results.Sort((a, b) => a.LineNumber.CompareTo(b.LineNumber));
             return results;
+        }
+
+        public static BaseFileSnapshot GetBaseFileSnapshot(string filePath)
+        {
+            if (string.IsNullOrWhiteSpace(filePath))
+            {
+                return null;
+            }
+
+            var directory = Path.GetDirectoryName(filePath);
+            var repoRoot = ResolveRepoRoot(directory);
+            if (string.IsNullOrWhiteSpace(repoRoot))
+            {
+                return null;
+            }
+
+            var relativePath = GetRelativePath(repoRoot, filePath);
+            if (string.IsNullOrWhiteSpace(relativePath))
+            {
+                return null;
+            }
+
+            relativePath = relativePath.Replace('\\', '/');
+            var baseRef = GetBaseReference(repoRoot);
+            if (string.IsNullOrWhiteSpace(baseRef))
+            {
+                return null;
+            }
+
+            var content = GetFileContentAtRef(repoRoot, baseRef, relativePath, out var existsInBase);
+            return new BaseFileSnapshot
+            {
+                RepoRoot = repoRoot,
+                RelativePath = relativePath,
+                BaseRef = baseRef,
+                Content = content ?? string.Empty,
+                ExistsInBase = existsInBase
+            };
+        }
+
+        public static string WriteTempFile(string relPath, string refName, string content)
+        {
+            var tempRoot = Path.Combine(Path.GetTempPath(), "KevGitChangesDiff");
+            if (!Directory.Exists(tempRoot))
+            {
+                Directory.CreateDirectory(tempRoot);
+            }
+
+            var fileName = Path.GetFileName(relPath);
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                fileName = "file";
+            }
+
+            var ext = Path.GetExtension(fileName);
+            var baseName = Path.GetFileNameWithoutExtension(fileName);
+            var key = ((refName ?? "base") + ":" + relPath).ToLowerInvariant();
+            var hash = ComputeSha1(key);
+            var safeBase = SanitizeFileName(baseName);
+            var tempFile = Path.Combine(tempRoot, safeBase + "." + hash + ext);
+            File.WriteAllText(tempFile, content ?? string.Empty);
+            return tempFile;
         }
 
         private static void AddOrUpdate(IDictionary<int, CommittedChangeKind> changes, int lineNumber, CommittedChangeKind kind)
@@ -314,6 +385,29 @@ namespace KevGitChanges
             var trimmed = payload.TrimStart();
             return trimmed.StartsWith("fatal:", StringComparison.OrdinalIgnoreCase)
                 || trimmed.StartsWith("error:", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string GetFileContentAtRef(string repoRoot, string refName, string relPath, out bool ok)
+        {
+            ok = false;
+            if (string.IsNullOrWhiteSpace(repoRoot) || string.IsNullOrWhiteSpace(refName) || string.IsNullOrWhiteSpace(relPath))
+            {
+                return null;
+            }
+
+            var payload = RunGit(repoRoot, $"show {refName}:\"{relPath}\"");
+            if (string.IsNullOrWhiteSpace(payload))
+            {
+                return null;
+            }
+
+            if (IsGitError(payload))
+            {
+                return null;
+            }
+
+            ok = true;
+            return payload;
         }
 
         private static string RunGit(string workingDirectory, string arguments)

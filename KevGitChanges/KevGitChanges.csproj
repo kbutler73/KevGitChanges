@@ -51,8 +51,12 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="CommittedChangeActions.cs" />
     <Compile Include="CommittedChangeGitService.cs" />
     <Compile Include="CommittedChangeOverviewMargin.cs" />
+    <Compile Include="KevGitChangesOptionsPage.cs">
+      <SubType>Component</SubType>
+    </Compile>
     <Compile Include="CommittedChangeTextMargin.cs" />
     <Compile Include="CommittedChangeTracker.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

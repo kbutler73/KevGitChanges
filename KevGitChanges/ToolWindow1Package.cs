@@ -35,14 +35,19 @@ namespace KevGitChanges
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
     [ProvideMenuResource("Menus.ctmenu", 1)]
     [ProvideToolWindow(typeof(KevGitChangesToolWindow))]
+    [ProvideOptionPage(typeof(KevGitChangesOptionsPage), "Kev Git Changes", "Editor", 0, 0, true)]
     [Guid(ToolWindow1Package.PackageGuidString)]
     [SuppressMessage("StyleCop.CSharp.DocumentationRules", "SA1650:ElementDocumentationMustBeSpelledCorrectly", Justification = "pkgdef, VS and vsixmanifest are valid VS terms")]
     public sealed class ToolWindow1Package : AsyncPackage
     {
+        private static ToolWindow1Package instance;
+
         /// <summary>
         /// ToolWindow1Package GUID string.
         /// </summary>
         public const string PackageGuidString = "9ba54964-05c5-4d86-849f-343069110e43";
+
+        internal static event EventHandler OptionsChanged;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ToolWindow1Package"/> class.
@@ -69,7 +74,20 @@ namespace KevGitChanges
             // When initialized asynchronously, the current thread may be a background thread at this point.
             // Do any initialization that requires the UI thread after switching to the UI thread.
             await this.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+            instance = this;
             await ToolWindow1Command.InitializeAsync(this);
+        }
+
+        internal static KevGitChangesOptionsPage GetOptions()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            return instance?.GetDialogPage(typeof(KevGitChangesOptionsPage)) as KevGitChangesOptionsPage;
+        }
+
+        internal static void NotifyOptionsChanged()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            OptionsChanged?.Invoke(instance, EventArgs.Empty);
         }
 
         #endregion

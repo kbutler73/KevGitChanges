@@ -2,7 +2,6 @@ using System;
 using System.ComponentModel.Composition;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using Microsoft.VisualStudio.Text;
@@ -52,7 +51,6 @@ namespace KevGitChanges
         private FrameworkElement verticalScrollBarElement;
         private Panel overlayHostPanel;
         private bool isDisposed;
-        private bool isMouseCaptured;
 
         public CommittedChangeOverviewMargin(IWpfTextView view, CommittedChangeTracker tracker, IWpfTextViewMargin marginContainer)
         {
@@ -71,16 +69,12 @@ namespace KevGitChanges
                 Background = Brushes.Transparent,
                 ClipToBounds = true,
                 SnapsToDevicePixels = true,
-                IsHitTestVisible = true,
-                Cursor = Cursors.Arrow
+                IsHitTestVisible = false
             };
-
-            overlayCanvas.MouseLeftButtonDown += OverlayCanvas_MouseLeftButtonDown;
-            overlayCanvas.MouseLeftButtonUp += OverlayCanvas_MouseLeftButtonUp;
-            overlayCanvas.MouseMove += OverlayCanvas_MouseMove;
 
             tracker.ChangesUpdated += Tracker_ChangesUpdated;
             view.LayoutChanged += View_LayoutChanged;
+            ToolWindow1Package.OptionsChanged += ToolWindow1Package_OptionsChanged;
 
             view.VisualElement.Dispatcher.BeginInvoke(new Action(() =>
             {
@@ -89,6 +83,7 @@ namespace KevGitChanges
                     return;
                 }
 
+                ApplyOptions();
                 TryAttachToVerticalScrollBar();
                 UpdateOverlayPlacement();
                 Redraw();
@@ -115,19 +110,16 @@ namespace KevGitChanges
 
             tracker.ChangesUpdated -= Tracker_ChangesUpdated;
             view.LayoutChanged -= View_LayoutChanged;
-
-            overlayCanvas.MouseLeftButtonDown -= OverlayCanvas_MouseLeftButtonDown;
-            overlayCanvas.MouseLeftButtonUp -= OverlayCanvas_MouseLeftButtonUp;
-            overlayCanvas.MouseMove -= OverlayCanvas_MouseMove;
-
-            if (isMouseCaptured)
-            {
-                overlayCanvas.ReleaseMouseCapture();
-                isMouseCaptured = false;
-            }
+            ToolWindow1Package.OptionsChanged -= ToolWindow1Package_OptionsChanged;
 
             DetachFromVerticalScrollBar();
             RemoveOverlayCanvas();
+        }
+
+        private void ToolWindow1Package_OptionsChanged(object sender, EventArgs e)
+        {
+            ApplyOptions();
+            Redraw();
         }
 
         private void Tracker_ChangesUpdated(object sender, EventArgs e)
@@ -158,30 +150,6 @@ namespace KevGitChanges
         {
             UpdateOverlayPlacement();
             Redraw();
-        }
-
-        private void OverlayCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-        {
-            if (isDisposed || verticalScrollBar == null) return;
-            overlayCanvas.CaptureMouse();
-            isMouseCaptured = true;
-            NavigateToOverlayCoordinate(e.GetPosition(overlayCanvas).Y);
-            e.Handled = true;
-        }
-
-        private void OverlayCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-        {
-            if (!isMouseCaptured) return;
-            overlayCanvas.ReleaseMouseCapture();
-            isMouseCaptured = false;
-            e.Handled = true;
-        }
-
-        private void OverlayCanvas_MouseMove(object sender, MouseEventArgs e)
-        {
-            if (!isMouseCaptured || e.LeftButton != MouseButtonState.Pressed) return;
-            NavigateToOverlayCoordinate(e.GetPosition(overlayCanvas).Y);
-            e.Handled = true;
         }
 
         private void TryAttachToVerticalScrollBar()
@@ -314,6 +282,11 @@ namespace KevGitChanges
                 return;
             }
 
+            if (!IsScrollbarMarkersEnabled())
+            {
+                return;
+            }
+
             var snapshot = tracker.CurrentSnapshot;
             var changes = tracker.CurrentChanges;
             if (snapshot == null || changes == null || changes.Count == 0)
@@ -382,25 +355,6 @@ namespace KevGitChanges
             }
         }
 
-        private void NavigateToOverlayCoordinate(double y)
-        {
-            if (verticalScrollBar == null || tracker.CurrentSnapshot == null)
-            {
-                return;
-            }
-
-            var clampedY = Math.Max(verticalScrollBar.TrackSpanTop, Math.Min(verticalScrollBar.TrackSpanBottom, y));
-            var point = verticalScrollBar.GetBufferPositionOfYCoordinate(clampedY);
-            if (point.Snapshot != tracker.CurrentSnapshot)
-            {
-                return;
-            }
-
-            var line = point.GetContainingLine();
-            view.Caret.MoveTo(line.Start);
-            view.ViewScroller.EnsureSpanVisible(line.Extent, EnsureSpanVisibleOptions.AlwaysCenter);
-        }
-
         private static Brush GetBrush(CommittedChangeKind kind)
         {
             switch (kind)
@@ -419,6 +373,23 @@ namespace KevGitChanges
             var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
             brush.Freeze();
             return brush;
+        }
+
+        private void ApplyOptions()
+        {
+            overlayCanvas.Visibility = IsScrollbarMarkersEnabled() ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private static bool IsScrollbarMarkersEnabled()
+        {
+            try
+            {
+                return ToolWindow1Package.GetOptions()?.ShowScrollbarMarkers != false;
+            }
+            catch
+            {
+                return true;
+            }
         }
     }
 }

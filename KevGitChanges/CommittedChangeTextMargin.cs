@@ -61,6 +61,8 @@ namespace KevGitChanges
             tracker.ChangesUpdated += Tracker_ChangesUpdated;
             view.LayoutChanged += View_LayoutChanged;
             SizeChanged += Margin_SizeChanged;
+            ToolWindow1Package.OptionsChanged += ToolWindow1Package_OptionsChanged;
+            ApplyOptions();
         }
 
         public bool Enabled => !isDisposed;
@@ -83,7 +85,14 @@ namespace KevGitChanges
             tracker.ChangesUpdated -= Tracker_ChangesUpdated;
             view.LayoutChanged -= View_LayoutChanged;
             SizeChanged -= Margin_SizeChanged;
+            ToolWindow1Package.OptionsChanged -= ToolWindow1Package_OptionsChanged;
             Children.Clear();
+        }
+
+        private void ToolWindow1Package_OptionsChanged(object sender, EventArgs e)
+        {
+            ApplyOptions();
+            Redraw();
         }
 
         private void Tracker_ChangesUpdated(object sender, EventArgs e)
@@ -110,6 +119,11 @@ namespace KevGitChanges
                 return;
             }
 
+            if (!IsLineMarkersEnabled())
+            {
+                return;
+            }
+
             var snapshot = tracker.CurrentSnapshot;
             var changes = tracker.CurrentChanges;
             var visibleLines = view.TextViewLines;
@@ -127,7 +141,7 @@ namespace KevGitChanges
                     continue;
                 }
 
-                var top = line.TextTop;
+                var top = line.TextTop - view.ViewportTop;
                 var height = Math.Max(2.0, line.TextHeight);
                 if (top + height < 0 || top > ActualHeight)
                 {
@@ -179,6 +193,23 @@ namespace KevGitChanges
             var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
             brush.Freeze();
             return brush;
+        }
+
+        private void ApplyOptions()
+        {
+            Visibility = IsLineMarkersEnabled() ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private static bool IsLineMarkersEnabled()
+        {
+            try
+            {
+                return ToolWindow1Package.GetOptions()?.ShowLineMarkers != false;
+            }
+            catch
+            {
+                return true;
+            }
         }
     }
 }
