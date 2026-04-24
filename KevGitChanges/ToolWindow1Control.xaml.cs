@@ -63,6 +63,11 @@ namespace KevGitChanges
         private Visibility workspaceColumnVisibility = Visibility.Visible;
         private Visibility localColumnVisibility = Visibility.Visible;
         private Visibility remoteColumnVisibility = Visibility.Visible;
+        private int lastVisibleItemCount;
+        private int lastHiddenItemCount;
+        private readonly System.Collections.Generic.HashSet<string> hiddenPaths =
+            new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+        private string hiddenPathsRepoRoot;
 
         [DataContract]
         private class RepoSettings
@@ -72,6 +77,9 @@ namespace KevGitChanges
 
             [DataMember(Name = "autoRefreshEnabled", EmitDefaultValue = false)]
             public bool? AutoRefreshEnabled { get; set; }
+
+            [DataMember(Name = "hiddenPaths", EmitDefaultValue = false)]
+            public System.Collections.Generic.List<string> HiddenPaths { get; set; }
         }
 
         private readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> scopeMap =
@@ -258,6 +266,7 @@ namespace KevGitChanges
             {
                 refreshPending = true;
                 pendingRefreshReason = refreshReason;
+                WriteOutput("Refresh queued: " + refreshReason);
                 return;
             }
 
@@ -266,6 +275,7 @@ namespace KevGitChanges
             pendingRefreshReason = refreshReason;
             lastRefreshReason = refreshReason;
             suppressGitMetadataEventsUntilUtc = DateTime.UtcNow.AddSeconds(5);
+            WriteOutput("Refresh started: " + refreshReason);
 
             // show busy indicator and run refresh
             Dispatcher.Invoke(() =>
@@ -287,6 +297,7 @@ namespace KevGitChanges
                     UpdateRefreshReasonDisplay(lastRefreshReason);
                     try { BaseBranchCombo.IsEnabled = true; } catch { }
                     try { refreshButton.IsEnabled = true; } catch { }
+                    WriteOutput($"Refresh completed: {lastRefreshReason} | Changes={lastVisibleItemCount} Hidden={lastHiddenItemCount}");
                     if (refreshPending)
                     {
                         StartRefresh();
@@ -445,6 +456,7 @@ namespace KevGitChanges
                     // show chosen base branch in UI
                     currentWorkDir = workDir;
                     currentRepoRoot = ResolveRepoRoot(workDir);
+                    LoadHiddenPaths(currentRepoRoot);
                     Dispatcher.Invoke(() =>
                     {
                         ApplySavedAutoRefreshSetting(currentRepoRoot);
@@ -728,6 +740,59 @@ namespace KevGitChanges
                 SaveRepoSettings(repoRoot, settings);
             }
             catch { }
+        }
+
+        private void LoadHiddenPaths(string repoRoot)
+        {
+            var normalizedRepoRoot = NormalizeRepoSettingsKey(repoRoot);
+            if (string.Equals(hiddenPathsRepoRoot, normalizedRepoRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            hiddenPaths.Clear();
+            hiddenPathsRepoRoot = normalizedRepoRoot;
+
+            try
+            {
+                var settings = LoadRepoSettings(repoRoot);
+                if (settings?.HiddenPaths == null) return;
+
+                foreach (var path in settings.HiddenPaths)
+                {
+                    var normalizedPath = NormalizeRelativeRepoPath(path);
+                    if (!string.IsNullOrWhiteSpace(normalizedPath))
+                    {
+                        hiddenPaths.Add(normalizedPath);
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private void SaveHiddenPaths(string repoRoot)
+        {
+            if (string.IsNullOrWhiteSpace(repoRoot)) return;
+            try
+            {
+                var settings = LoadRepoSettings(repoRoot) ?? new RepoSettings();
+                settings.HiddenPaths = new System.Collections.Generic.List<string>(hiddenPaths);
+                settings.HiddenPaths.Sort(StringComparer.OrdinalIgnoreCase);
+                SaveRepoSettings(repoRoot, settings);
+            }
+            catch { }
+        }
+
+        private bool IsHiddenPath(string relativePath)
+        {
+            var normalizedPath = NormalizeRelativeRepoPath(relativePath);
+            return !string.IsNullOrWhiteSpace(normalizedPath) && hiddenPaths.Contains(normalizedPath);
+        }
+
+        private static string NormalizeRelativeRepoPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return null;
+            return path.Replace('\\', '/').Trim().Trim('/');
         }
 
         private bool? LoadAutoRefreshSetting(string repoRoot)
@@ -1465,6 +1530,7 @@ namespace KevGitChanges
         private void UpdateListViews(System.Collections.Generic.IDictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> scopes)
         {
             var localItems = new System.Collections.Generic.List<ChangeItem>();
+            var hiddenItems = new System.Collections.Generic.List<ChangeItem>();
             CaptureFilterState();
             UpdateStatusColumnVisibility(scopes);
 
@@ -1479,15 +1545,38 @@ namespace KevGitChanges
                     var nodeScopes = scopes[trimmed];
                     var item = BuildChangeItem(trimmed, nodeScopes);
                     if (item == null) continue;
-                    localItems.Add(item);
+                    if (IsHiddenPath(item.Path))
+                    {
+                        hiddenItems.Add(item);
+                    }
+                    else
+                    {
+                        localItems.Add(item);
+                    }
                 }
             }
 
             var localTree = BuildTree(localItems);
+            if (hiddenItems.Count > 0)
+            {
+                var hiddenTree = BuildTree(hiddenItems);
+                var hiddenRoot = new TreeNode
+                {
+                    Name = $"Hidden ({hiddenItems.Count})",
+                    IsExpanded = false,
+                    Icon = folderIcon,
+                    IconMoniker = KnownMonikers.FolderClosed
+                };
+                hiddenRoot.Children.AddRange(hiddenTree);
+                localTree.Add(hiddenRoot);
+            }
+            AssignDepth(localTree, 0);
 
             this.Dispatcher.Invoke(() =>
             {
                 if (LocalTree != null) LocalTree.ItemsSource = localTree;
+                lastVisibleItemCount = localItems.Count;
+                lastHiddenItemCount = hiddenItems.Count;
                 if (LocalCount != null) LocalCount.Text = $"({localItems.Count})";
             });
         }
@@ -1838,7 +1927,14 @@ namespace KevGitChanges
         private void ApplyNodeVisuals(TreeNode node)
         {
             if (node == null) return;
-            node.IsExpanded = node.Children.Count > 0;
+            if (node.Name != null && node.Name.StartsWith("Hidden", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(node.FullPath))
+            {
+                node.IsExpanded = false;
+            }
+            else
+            {
+                node.IsExpanded = node.Children.Count > 0;
+            }
             node.Icon = node.IsFile ? fileIcon : folderIcon;
             node.IconMoniker = node.IsFile ? KnownMonikers.TextFile : KnownMonikers.FolderClosed;
             if (iconDiagnosticsCount < 1)
@@ -2179,12 +2275,41 @@ namespace KevGitChanges
                 if (!(LocalTree?.SelectedItem is TreeNode node) || !node.IsFile)
                 {
                     e.Handled = true;
+                    return;
+                }
+
+                if (ToggleHiddenGroupMenu != null)
+                {
+                    ToggleHiddenGroupMenu.Header = IsHiddenPath(node.FullPath) ? "Remove from Hidden" : "Move to Hidden";
                 }
             }
             catch
             {
                 e.Handled = true;
             }
+        }
+
+        private void ToggleHiddenGroup_Click(object sender, RoutedEventArgs e)
+        {
+            var file = GetSelectedFile();
+            if (string.IsNullOrWhiteSpace(file)) return;
+
+            LoadHiddenPaths(currentRepoRoot);
+
+            var normalizedPath = NormalizeRelativeRepoPath(file);
+            if (string.IsNullOrWhiteSpace(normalizedPath)) return;
+
+            if (hiddenPaths.Contains(normalizedPath))
+            {
+                hiddenPaths.Remove(normalizedPath);
+            }
+            else
+            {
+                hiddenPaths.Add(normalizedPath);
+            }
+
+            SaveHiddenPaths(currentRepoRoot);
+            UpdateListViews(scopeMap);
         }
 
         private void LocalTree_MouseDoubleClick(object sender, MouseButtonEventArgs e)
