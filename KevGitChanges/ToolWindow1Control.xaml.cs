@@ -58,6 +58,7 @@ namespace KevGitChanges
         private string deferredAutoRefreshReason;
         private bool deferredAutoRefreshReasonIsSpecificPath;
         private DateTime lastRefreshUtc = DateTime.MinValue;
+        private DateTime lastFetchUtc = DateTime.MinValue;
         private DateTime suppressGitMetadataEventsUntilUtc = DateTime.MinValue;
         private bool isVsBuildActive;
         private bool isVsDebugActive;
@@ -65,6 +66,7 @@ namespace KevGitChanges
         private static readonly TimeSpan WorkspaceRefreshDebounce = TimeSpan.FromMilliseconds(900);
         private static readonly TimeSpan PeriodicRefreshCheckInterval = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan PeriodicRefreshThreshold = TimeSpan.FromMinutes(10);
+        private static readonly TimeSpan FetchRefreshThreshold = TimeSpan.FromMinutes(10);
         private Visibility workspaceColumnVisibility = Visibility.Visible;
         private Visibility localColumnVisibility = Visibility.Visible;
         private Visibility remoteColumnVisibility = Visibility.Visible;
@@ -296,7 +298,7 @@ namespace KevGitChanges
             });
             _ = Task.Run(async () =>
             {
-                await DoRefreshAsync();
+                await DoRefreshAsync(refreshReason);
                 Dispatcher.Invoke(() =>
                 {
                     lastRefreshUtc = DateTime.UtcNow;
@@ -315,7 +317,7 @@ namespace KevGitChanges
             });
         }
 
-        private async Task DoRefreshAsync()
+        private async Task DoRefreshAsync(string refreshReason)
         {
             // reuse existing Refresh_Click logic but without UI event args
             await Task.Run(() =>
@@ -364,7 +366,14 @@ namespace KevGitChanges
                         workDir = dir.FullName;
                     }
 
-                    RunGit(workDir, "fetch --all --prune");
+                    if (ShouldFetchForRefresh(refreshReason))
+                    {
+                        var fetchResult = RunGit(workDir, "fetch --all --prune");
+                        if (!IsGitRepoError(fetchResult))
+                        {
+                            lastFetchUtc = DateTime.UtcNow;
+                        }
+                    }
 
                     currentBranch = RunGit(workDir, "rev-parse --abbrev-ref HEAD");
                     if (string.IsNullOrWhiteSpace(currentBranch))
@@ -488,7 +497,7 @@ namespace KevGitChanges
                     // Build scope maps for workspace, local, remote, main
                     scopeMap.Clear();
 
-                    var workspaceTask = Task.Run(() => RunGit(workDir, "status --porcelain=v1"));
+                    var workspaceTask = Task.Run(() => RunGit(workDir, "status --porcelain=v1 -uall"));
                     var originBranch = selectedRemote + "/" + currentBranch;
                     var baseExists = RefExists(workDir, currentBaseBranch);
                     var originExists = RefExists(workDir, originBranch);
@@ -526,6 +535,7 @@ namespace KevGitChanges
                     Task.WaitAll(workspaceTask, localTask, remoteTask, mainTask);
 
                     AddScopeStatusFromPorcelain(scopeMap, workspaceTask.Result, ChangeScope.Workspace);
+                    AddUntrackedWorkspaceDirectories(scopeMap, workDir);
                     AddScopeStatusFromNameStatus(scopeMap, localTask.Result, ChangeScope.Local);
                     AddScopeStatusFromNameStatus(scopeMap, remoteTask.Result, ChangeScope.Remote);
                     AddScopeStatusFromNameStatus(scopeMap, mainTask.Result, ChangeScope.Main);
@@ -537,6 +547,17 @@ namespace KevGitChanges
                     UpdateStatus("Error: " + ex.Message);
                 }
             });
+        }
+
+        private bool ShouldFetchForRefresh(string refreshReason)
+        {
+            if (string.Equals(refreshReason, "Manual", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return lastFetchUtc == DateTime.MinValue ||
+                (DateTime.UtcNow - lastFetchUtc) >= FetchRefreshThreshold;
         }
 
         // Remote selection removed; always use 'origin'
@@ -795,7 +816,20 @@ namespace KevGitChanges
         private bool IsHiddenPath(string relativePath)
         {
             var normalizedPath = NormalizeRelativeRepoPath(relativePath);
-            return !string.IsNullOrWhiteSpace(normalizedPath) && hiddenPaths.Contains(normalizedPath);
+            return GetMatchingHiddenPath(normalizedPath) != null;
+        }
+
+        private string GetMatchingHiddenPath(string normalizedPath)
+        {
+            if (string.IsNullOrWhiteSpace(normalizedPath)) return null;
+            foreach (var hiddenPath in hiddenPaths)
+            {
+                if (string.IsNullOrWhiteSpace(hiddenPath)) continue;
+                if (string.Equals(normalizedPath, hiddenPath, StringComparison.OrdinalIgnoreCase)) return hiddenPath;
+                if (normalizedPath.StartsWith(hiddenPath + "/", StringComparison.OrdinalIgnoreCase)) return hiddenPath;
+            }
+
+            return null;
         }
 
         private static string NormalizeRelativeRepoPath(string path)
@@ -1370,6 +1404,11 @@ namespace KevGitChanges
 
         private bool ShouldIgnoreWorkspacePath(string fullPath)
         {
+            return ShouldIgnoreWorkspacePath(fullPath, true);
+        }
+
+        private bool ShouldIgnoreWorkspacePath(string fullPath, bool checkGitIgnore)
+        {
             if (string.IsNullOrWhiteSpace(fullPath)) return true;
 
             var normalized = fullPath.Replace('\\', '/');
@@ -1388,7 +1427,7 @@ namespace KevGitChanges
             if (fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) return true;
             if (fileName.EndsWith(".user", StringComparison.OrdinalIgnoreCase)) return true;
             if (fileName.EndsWith(".suo", StringComparison.OrdinalIgnoreCase)) return true;
-            if (IsGitIgnoredPath(fullPath)) return true;
+            if (checkGitIgnore && IsGitIgnoredPath(fullPath)) return true;
 
             return false;
         }
@@ -1578,6 +1617,8 @@ namespace KevGitChanges
             if (string.IsNullOrWhiteSpace(fullPath)) return false;
 
             var normalized = fullPath.Replace('\\', '/');
+            if (normalized.EndsWith(".lock", StringComparison.OrdinalIgnoreCase)) return false;
+
             if (normalized.EndsWith("/HEAD", StringComparison.OrdinalIgnoreCase)) return true;
             if (normalized.EndsWith("/index", StringComparison.OrdinalIgnoreCase)) return true;
             if (normalized.EndsWith("/packed-refs", StringComparison.OrdinalIgnoreCase)) return true;
@@ -1591,6 +1632,7 @@ namespace KevGitChanges
         private class ChangeItem
         {
             public string Path { get; set; }
+            public bool IsDirectory { get; set; }
             public string WStatus { get; set; }
             public string LStatus { get; set; }
             public string RStatus { get; set; }
@@ -1720,6 +1762,87 @@ namespace KevGitChanges
             }
         }
 
+        private void AddUntrackedWorkspaceDirectories(System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> target, string workDir)
+        {
+            if (target == null || string.IsNullOrWhiteSpace(workDir) || !System.IO.Directory.Exists(workDir)) return;
+
+            try
+            {
+                foreach (var dir in EnumerateCandidateWorkspaceDirectories(workDir))
+                {
+                    if (DirectoryHasAnyEntry(dir)) continue;
+
+                    var relativePath = GetRelativePath(workDir, dir);
+                    if (string.IsNullOrWhiteSpace(relativePath)) continue;
+
+                    var normalizedPath = NormalizeDirectoryChangePath(relativePath);
+                    if (string.IsNullOrWhiteSpace(normalizedPath)) continue;
+                    AddScopeStatus(target, normalizedPath, ChangeScope.Workspace, "A");
+                }
+            }
+            catch
+            {
+                // Empty folders are a display nicety; Git status remains the source of truth for files.
+            }
+        }
+
+        private System.Collections.Generic.IEnumerable<string> EnumerateCandidateWorkspaceDirectories(string root)
+        {
+            var pending = new System.Collections.Generic.Stack<string>();
+            pending.Push(root);
+
+            while (pending.Count > 0)
+            {
+                var parent = pending.Pop();
+                string[] children;
+                try
+                {
+                    children = System.IO.Directory.GetDirectories(parent);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (var child in children)
+                {
+                    if (ShouldIgnoreWorkspacePath(child, false)) continue;
+                    yield return child;
+                    pending.Push(child);
+                }
+            }
+        }
+
+        private static bool DirectoryHasAnyEntry(string path)
+        {
+            try
+            {
+                foreach (var ignored in System.IO.Directory.EnumerateFileSystemEntries(path))
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static string NormalizeDirectoryChangePath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return null;
+            var normalized = path.Trim().Replace('\\', '/').TrimEnd('/');
+            return string.IsNullOrWhiteSpace(normalized) ? null : normalized + "/";
+        }
+
+        private static bool IsDirectoryChangePath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return false;
+            return path.EndsWith("/", StringComparison.Ordinal) || path.EndsWith("\\", StringComparison.Ordinal);
+        }
+
         private static void AddScopeStatus(System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> target, string path, ChangeScope scope, string status)
         {
             if (target == null || string.IsNullOrWhiteSpace(path)) return;
@@ -1734,7 +1857,11 @@ namespace KevGitChanges
         private ChangeItem BuildChangeItem(string path, System.Collections.Generic.Dictionary<ChangeScope, string> scopes)
         {
             if (scopes == null) return null;
-            var item = new ChangeItem { Path = path };
+            var item = new ChangeItem
+            {
+                Path = path,
+                IsDirectory = IsDirectoryChangePath(path)
+            };
             var any = false;
 
             if (ShouldShowScope(ChangeScope.Workspace) && scopes.TryGetValue(ChangeScope.Workspace, out var wStatus))
@@ -1898,7 +2025,12 @@ namespace KevGitChanges
                     accum = string.IsNullOrEmpty(accum) ? part : (accum + "/" + part);
                     if (!map.TryGetValue(accum, out var node))
                     {
-                        node = new TreeNode { Name = part };
+                        node = new TreeNode
+                        {
+                            Name = part,
+                            FullPath = accum,
+                            IsDirectory = true
+                        };
                         map[accum] = node;
                         currentList.Add(node);
                     }
@@ -1907,6 +2039,7 @@ namespace KevGitChanges
                     if (i == parts.Length - 1)
                     {
                         node.FullPath = it.Path;
+                        node.IsDirectory = it.IsDirectory;
                         node.WStatus = it.WStatus;
                         node.LStatus = it.LStatus;
                         node.RStatus = it.RStatus;
@@ -1999,10 +2132,12 @@ namespace KevGitChanges
                 CompressNode(node.Children[i]);
             }
 
-            while (node.FullPath == null && node.Children.Count == 1 && !node.Children[0].IsFile)
+            while (node.IsDirectory && node.Children.Count == 1 && node.Children[0].IsDirectory && !node.Children[0].IsFile)
             {
                 var child = node.Children[0];
                 node.Name = node.Name + "/" + child.Name;
+                node.FullPath = child.FullPath;
+                node.IsDirectory = true;
                 node.Children.Clear();
                 node.Children.AddRange(child.Children);
             }
@@ -2356,15 +2491,24 @@ namespace KevGitChanges
         {
             try
             {
-                if (!(LocalTree?.SelectedItem is TreeNode node) || !node.IsFile)
+                if (!(LocalTree?.SelectedItem is TreeNode node) || string.IsNullOrWhiteSpace(node.FullPath))
                 {
                     e.Handled = true;
                     return;
                 }
 
+                var showFileActions = node.IsFile ? Visibility.Visible : Visibility.Collapsed;
+                if (OpenFileMenu != null) OpenFileMenu.Visibility = showFileActions;
+                if (OpenFileSeparator != null) OpenFileSeparator.Visibility = showFileActions;
+                if (CompareSeparator != null) CompareSeparator.Visibility = showFileActions;
+                if (CompareWithLocalMenu != null) CompareWithLocalMenu.Visibility = showFileActions;
+                if (CompareWithRemoteMenu != null) CompareWithRemoteMenu.Visibility = showFileActions;
+                if (CompareWithMainMenu != null) CompareWithMainMenu.Visibility = showFileActions;
+                if (CompareSelectionMenu != null) CompareSelectionMenu.Visibility = showFileActions;
+
                 if (ToggleHiddenGroupMenu != null)
                 {
-                    ToggleHiddenGroupMenu.Header = IsHiddenPath(node.FullPath) ? "Remove from Hidden" : "Move to Hidden";
+                    ToggleHiddenGroupMenu.Header = IsHiddenPath(node.FullPath) ? "Show" : "Hide";
                 }
             }
             catch
@@ -2375,17 +2519,18 @@ namespace KevGitChanges
 
         private void ToggleHiddenGroup_Click(object sender, RoutedEventArgs e)
         {
-            var file = GetSelectedFile();
-            if (string.IsNullOrWhiteSpace(file)) return;
+            var path = GetSelectedChangePath();
+            if (string.IsNullOrWhiteSpace(path)) return;
 
             LoadHiddenPaths(currentRepoRoot);
 
-            var normalizedPath = NormalizeRelativeRepoPath(file);
+            var normalizedPath = NormalizeRelativeRepoPath(path);
             if (string.IsNullOrWhiteSpace(normalizedPath)) return;
 
-            if (hiddenPaths.Contains(normalizedPath))
+            var matchingHiddenPath = GetMatchingHiddenPath(normalizedPath);
+            if (!string.IsNullOrWhiteSpace(matchingHiddenPath))
             {
-                hiddenPaths.Remove(normalizedPath);
+                hiddenPaths.Remove(matchingHiddenPath);
             }
             else
             {
@@ -2427,6 +2572,19 @@ namespace KevGitChanges
         }
 
         private string GetSelectedFile()
+        {
+            try
+            {
+                if (LocalTree.SelectedItem is TreeNode node && node.IsFile && !string.IsNullOrWhiteSpace(node.FullPath))
+                {
+                    return node.FullPath;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private string GetSelectedChangePath()
         {
             try
             {
