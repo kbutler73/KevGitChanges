@@ -25,7 +25,8 @@ namespace KevGitChanges
         public Brush RBrush { get; set; }
         public Brush MBrush { get; set; }
         public bool IsExpanded { get; set; } = true;
-        public bool IsFile => Children.Count == 0 && !string.IsNullOrEmpty(FullPath);
+        public bool IsDirectory { get; set; }
+        public bool IsFile => !IsDirectory && Children.Count == 0 && !string.IsNullOrEmpty(FullPath);
         public bool IsDeleted { get; set; } // True if file is deleted
     }
 }

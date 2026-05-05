@@ -493,15 +493,15 @@
                     </TreeView.ItemTemplate>
                     <TreeView.ContextMenu>
                         <ContextMenu>
-                            <MenuItem Header="Open file" Click="OpenFile_Click" />
+                            <MenuItem Name="OpenFileMenu" Header="Open file" Click="OpenFile_Click" />
+                            <Separator Name="OpenFileSeparator" />
+                            <MenuItem Name="ToggleHiddenGroupMenu" Header="Hide" Click="ToggleHiddenGroup_Click" />
                             <Separator />
-                            <MenuItem Name="ToggleHiddenGroupMenu" Header="Move to Hidden" Click="ToggleHiddenGroup_Click" />
-                            <Separator />
+                            <MenuItem Name="CompareSelectionMenu" Header="Compare selection (A vs B)" Click="CompareSelected_Click" />
+                            <Separator Name="CompareSeparator" />
                             <MenuItem Name="CompareWithLocalMenu" Header="Compare vs Local" Click="CompareWithLocal_Click" />
                             <MenuItem Name="CompareWithRemoteMenu" Header="Compare vs Remote" Click="CompareWithRemote_Click" />
                             <MenuItem Name="CompareWithMainMenu" Header="Compare vs Base" Click="CompareWithMain_Click" />
-                            <Separator />
-                            <MenuItem Name="CompareSelectionMenu" Header="Compare selection (A vs B)" Click="CompareSelected_Click" />
                         </ContextMenu>
                     </TreeView.ContextMenu>
                 </TreeView>
