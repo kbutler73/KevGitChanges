@@ -72,6 +72,9 @@ namespace KevGitChanges
         private Visibility remoteColumnVisibility = Visibility.Visible;
         private int lastVisibleItemCount;
         private int lastHiddenItemCount;
+        private readonly System.Collections.Generic.List<FrameworkElement> statusPresenters =
+            new System.Collections.Generic.List<FrameworkElement>();
+        private double treeHorizontalOffset;
 
         private readonly System.Collections.Generic.HashSet<string> hiddenPaths =
             new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
@@ -535,7 +538,6 @@ namespace KevGitChanges
                     Task.WaitAll(workspaceTask, localTask, remoteTask, mainTask);
 
                     AddScopeStatusFromPorcelain(scopeMap, workspaceTask.Result, ChangeScope.Workspace);
-                    AddUntrackedWorkspaceDirectories(scopeMap, workDir);
                     AddScopeStatusFromNameStatus(scopeMap, localTask.Result, ChangeScope.Local);
                     AddScopeStatusFromNameStatus(scopeMap, remoteTask.Result, ChangeScope.Remote);
                     AddScopeStatusFromNameStatus(scopeMap, mainTask.Result, ChangeScope.Main);
@@ -2057,6 +2059,7 @@ namespace KevGitChanges
                     }
                 }
             }
+            PruneFoldersWithoutChangedFiles(roots);
             CompressTree(roots);
             foreach (var root in roots)
             {
@@ -2065,6 +2068,30 @@ namespace KevGitChanges
             SortTree(roots);
             AssignDepth(roots, 0);
             return roots;
+        }
+
+        private static void PruneFoldersWithoutChangedFiles(System.Collections.Generic.List<TreeNode> nodes)
+        {
+            if (nodes == null) return;
+            for (int i = nodes.Count - 1; i >= 0; i--)
+            {
+                if (!ContainsChangedFile(nodes[i]))
+                {
+                    nodes.RemoveAt(i);
+                }
+            }
+        }
+
+        private static bool ContainsChangedFile(TreeNode node)
+        {
+            if (node == null) return false;
+            if (!node.IsDirectory)
+            {
+                return !string.IsNullOrWhiteSpace(node.FullPath);
+            }
+
+            PruneFoldersWithoutChangedFiles(node.Children);
+            return node.Children.Count > 0;
         }
 
         private bool IsDLeftmost(string[] variables)
@@ -2609,6 +2636,66 @@ namespace KevGitChanges
         private void CompareSelection_Changed(object sender, SelectionChangedEventArgs e)
         {
             UpdateCompareMenuHeader();
+        }
+
+        private void LocalTree_ScrollChanged(object sender, ScrollChangedEventArgs e)
+        {
+            if (Math.Abs(e.HorizontalChange) <= 0.01 && Math.Abs(e.ExtentWidthChange) <= 0.01 && Math.Abs(e.ViewportWidthChange) <= 0.01)
+            {
+                return;
+            }
+
+            treeHorizontalOffset = e.HorizontalOffset;
+            ApplyStatusPresenterOffsets();
+        }
+
+        private void StatusPresenter_Loaded(object sender, RoutedEventArgs e)
+        {
+            var presenter = sender as FrameworkElement;
+            if (presenter == null) return;
+            if (!statusPresenters.Contains(presenter))
+            {
+                statusPresenters.Add(presenter);
+            }
+
+            ApplyStatusPresenterOffset(presenter);
+        }
+
+        private void StatusPresenter_Unloaded(object sender, RoutedEventArgs e)
+        {
+            var presenter = sender as FrameworkElement;
+            if (presenter == null) return;
+            statusPresenters.Remove(presenter);
+        }
+
+        private void StatusPresenter_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            ApplyStatusPresenterOffset(sender as FrameworkElement);
+        }
+
+        private void ApplyStatusPresenterOffsets()
+        {
+            foreach (var presenter in statusPresenters.ToArray())
+            {
+                ApplyStatusPresenterOffset(presenter);
+            }
+        }
+
+        private void ApplyStatusPresenterOffset(FrameworkElement presenter)
+        {
+            if (presenter == null || LocalTree == null) return;
+
+            var transform = presenter.RenderTransform as TranslateTransform;
+            if (transform == null || transform.IsFrozen)
+            {
+                transform = new TranslateTransform();
+                presenter.RenderTransform = transform;
+            }
+
+            var row = presenter.Parent as FrameworkElement;
+            var rowWidth = row?.ActualWidth ?? 0;
+            var viewportWidth = LocalTree.ActualWidth;
+            transform.X = viewportWidth - rowWidth + treeHorizontalOffset;
         }
 
         private void FilterChanged(object sender, RoutedEventArgs e)
