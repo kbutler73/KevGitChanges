@@ -535,7 +535,6 @@ namespace KevGitChanges
                     Task.WaitAll(workspaceTask, localTask, remoteTask, mainTask);
 
                     AddScopeStatusFromPorcelain(scopeMap, workspaceTask.Result, ChangeScope.Workspace);
-                    AddUntrackedWorkspaceDirectories(scopeMap, workDir);
                     AddScopeStatusFromNameStatus(scopeMap, localTask.Result, ChangeScope.Local);
                     AddScopeStatusFromNameStatus(scopeMap, remoteTask.Result, ChangeScope.Remote);
                     AddScopeStatusFromNameStatus(scopeMap, mainTask.Result, ChangeScope.Main);
@@ -2057,6 +2056,7 @@ namespace KevGitChanges
                     }
                 }
             }
+            PruneFoldersWithoutChangedFiles(roots);
             CompressTree(roots);
             foreach (var root in roots)
             {
@@ -2065,6 +2065,30 @@ namespace KevGitChanges
             SortTree(roots);
             AssignDepth(roots, 0);
             return roots;
+        }
+
+        private static void PruneFoldersWithoutChangedFiles(System.Collections.Generic.List<TreeNode> nodes)
+        {
+            if (nodes == null) return;
+            for (int i = nodes.Count - 1; i >= 0; i--)
+            {
+                if (!ContainsChangedFile(nodes[i]))
+                {
+                    nodes.RemoveAt(i);
+                }
+            }
+        }
+
+        private static bool ContainsChangedFile(TreeNode node)
+        {
+            if (node == null) return false;
+            if (!node.IsDirectory)
+            {
+                return !string.IsNullOrWhiteSpace(node.FullPath);
+            }
+
+            PruneFoldersWithoutChangedFiles(node.Children);
+            return node.Children.Count > 0;
         }
 
         private bool IsDLeftmost(string[] variables)
