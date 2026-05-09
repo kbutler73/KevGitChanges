@@ -98,10 +98,22 @@
                                 </Grid.ColumnDefinitions>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
-                                <ContentPresenter Grid.Column="1" Panel.ZIndex="0" ContentTemplate="{DynamicResource StatusColumnsTemplate}" Content="{Binding}" HorizontalAlignment="Right" />
+                                <ContentPresenter x:Name="StatusPresenter"
+                                                  Grid.Column="1"
+                                                  Panel.ZIndex="2"
+                                                  ContentTemplate="{DynamicResource StatusColumnsTemplate}"
+                                                  Content="{Binding}"
+                                                  HorizontalAlignment="Right"
+                                                  Loaded="StatusPresenter_Loaded"
+                                                  Unloaded="StatusPresenter_Unloaded"
+                                                  SizeChanged="StatusPresenter_SizeChanged">
+                                    <ContentPresenter.RenderTransform>
+                                        <TranslateTransform />
+                                    </ContentPresenter.RenderTransform>
+                                </ContentPresenter>
                                 <Border x:Name="Bd" Grid.Column="0" Panel.ZIndex="1" Background="{TemplateBinding Background}">
                                     <Grid Margin="{Binding Depth, Converter={StaticResource TreeIndentToMargin}}">
                                         <Grid.ColumnDefinitions>
@@ -274,7 +286,9 @@
             </Style>
 
             <DataTemplate x:Key="StatusColumnsTemplate">
-                <Grid HorizontalAlignment="Right">
+                <Grid HorizontalAlignment="Right"
+                      Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
+                      Margin="4,0,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
@@ -456,6 +470,8 @@
                 <TreeView Name="LocalTree" Grid.Row="1" Margin="0,6,0,0" PreviewMouseRightButtonDown="TreeView_PreviewMouseRightButtonDown" MouseDoubleClick="LocalTree_MouseDoubleClick" ContextMenuOpening="LocalTree_ContextMenuOpening"
                           Grid.IsSharedSizeScope="True"
                           ScrollViewer.VerticalScrollBarVisibility="Auto"
+                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                          ScrollViewer.ScrollChanged="LocalTree_ScrollChanged"
                           ScrollViewer.CanContentScroll="True"
                           VirtualizingStackPanel.IsVirtualizing="True"
                           VirtualizingStackPanel.VirtualizationMode="Recycling">
@@ -476,7 +492,7 @@
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
                                 <Image Width="20" Height="16" Margin="0,0,4,0" Source="{Binding Icon}" Stretch="None" SnapsToDevicePixels="True" />
-                                <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding FullPath}">
+                                <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" TextWrapping="NoWrap" ToolTip="{Binding FullPath}">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
                                             <Style.Triggers>
