@@ -75,6 +75,7 @@ namespace KevGitChanges
         private readonly System.Collections.Generic.List<FrameworkElement> statusPresenters =
             new System.Collections.Generic.List<FrameworkElement>();
         private double treeHorizontalOffset;
+        private double treeViewportWidth;
 
         private readonly System.Collections.Generic.HashSet<string> hiddenPaths =
             new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
@@ -2646,6 +2647,7 @@ namespace KevGitChanges
             }
 
             treeHorizontalOffset = e.HorizontalOffset;
+            treeViewportWidth = e.ViewportWidth;
             ApplyStatusPresenterOffsets();
         }
 
@@ -2694,7 +2696,7 @@ namespace KevGitChanges
 
             var row = presenter.Parent as FrameworkElement;
             var rowWidth = row?.ActualWidth ?? 0;
-            var viewportWidth = LocalTree.ActualWidth;
+            var viewportWidth = treeViewportWidth > 0 ? treeViewportWidth : LocalTree.ActualWidth;
             transform.X = viewportWidth - rowWidth + treeHorizontalOffset;
         }
 
