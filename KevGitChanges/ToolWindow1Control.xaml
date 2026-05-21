@@ -511,6 +511,8 @@
                         <ContextMenu>
                             <MenuItem Name="OpenFileMenu" Header="Open file" Click="OpenFile_Click" />
                             <Separator Name="OpenFileSeparator" />
+                            <MenuItem Name="RevertWorkspaceMenu" Header="Revert workspace changes" Click="RevertWorkspace_Click" />
+                            <Separator Name="RevertWorkspaceSeparator" />
                             <MenuItem Name="ToggleHiddenGroupMenu" Header="Hide" Click="ToggleHiddenGroup_Click" />
                             <Separator />
                             <MenuItem Name="CompareSelectionMenu" Header="Compare selection (A vs B)" Click="CompareSelected_Click" />

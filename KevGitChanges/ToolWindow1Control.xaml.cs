@@ -2504,6 +2504,56 @@ namespace KevGitChanges
             CompareScopes(file, "Workspace", "Local");
         }
 
+        private void RevertWorkspace_Click(object sender, RoutedEventArgs e)
+        {
+            TreeNode node = null;
+            try
+            {
+                node = LocalTree?.SelectedItem as TreeNode;
+            }
+            catch { }
+
+            if (node == null || string.IsNullOrWhiteSpace(node.FullPath) || !NodeHasWorkspaceChanges(node))
+            {
+                return;
+            }
+
+            var path = NormalizeRelativeRepoPath(node.FullPath);
+            var workDir = !string.IsNullOrWhiteSpace(currentRepoRoot) ? currentRepoRoot : currentWorkDir;
+            if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(workDir))
+            {
+                return;
+            }
+
+            var targetLabel = node.IsDirectory ? "folder" : "file";
+            var confirm = MessageBox.Show(
+                Window.GetWindow(this),
+                $"Revert workspace changes for this {targetLabel}?\n\n{path}\n\nThis will discard uncommitted changes and remove untracked files under the selected path. This cannot be undone.",
+                "Confirm Revert",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning,
+                MessageBoxResult.No);
+
+            if (confirm != MessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            WriteOutput($"Reverting workspace changes for {path}...");
+            _ = Task.Run(() =>
+            {
+                var ok = RevertWorkspacePath(workDir, path, out var error);
+                if (!ok)
+                {
+                    UpdateStatus("Revert failed: " + error);
+                    return;
+                }
+
+                WriteOutput($"Reverted workspace changes for {path}.");
+                StartRefresh("Revert");
+            });
+        }
+
         private void TreeView_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
         {
             var dep = e.OriginalSource as DependencyObject;
@@ -2533,6 +2583,10 @@ namespace KevGitChanges
                 if (CompareWithRemoteMenu != null) CompareWithRemoteMenu.Visibility = showFileActions;
                 if (CompareWithMainMenu != null) CompareWithMainMenu.Visibility = showFileActions;
                 if (CompareSelectionMenu != null) CompareSelectionMenu.Visibility = showFileActions;
+
+                var showRevert = NodeHasWorkspaceChanges(node) ? Visibility.Visible : Visibility.Collapsed;
+                if (RevertWorkspaceMenu != null) RevertWorkspaceMenu.Visibility = showRevert;
+                if (RevertWorkspaceSeparator != null) RevertWorkspaceSeparator.Visibility = showRevert;
 
                 if (ToggleHiddenGroupMenu != null)
                 {
@@ -2623,6 +2677,17 @@ namespace KevGitChanges
             }
             catch { }
             return null;
+        }
+
+        private static bool NodeHasWorkspaceChanges(TreeNode node)
+        {
+            if (node == null) return false;
+            if (!string.IsNullOrWhiteSpace(node.WStatus)) return true;
+            foreach (var child in node.Children)
+            {
+                if (NodeHasWorkspaceChanges(child)) return true;
+            }
+            return false;
         }
 
         private void InitializeCompareOptions()
@@ -3132,6 +3197,63 @@ namespace KevGitChanges
         {
             int ignored;
             return RunGit(workingDirectory, arguments, out ignored);
+        }
+
+        private bool RevertWorkspacePath(string workingDirectory, string relativePath, out string error)
+        {
+            error = null;
+            if (string.IsNullOrWhiteSpace(workingDirectory) || string.IsNullOrWhiteSpace(relativePath))
+            {
+                error = "No selected path.";
+                return false;
+            }
+
+            var pathspec = QuoteGitPath(relativePath.Replace('\\', '/'));
+
+            int resetExit;
+            var reset = RunGit(workingDirectory, "reset -q HEAD -- " + pathspec, out resetExit);
+
+            int checkoutExit;
+            var checkout = RunGit(workingDirectory, "checkout -q -- " + pathspec, out checkoutExit);
+
+            int cleanExit;
+            var clean = RunGit(workingDirectory, "clean -fd -- " + pathspec, out cleanExit);
+
+            int statusExit;
+            var status = RunGit(workingDirectory, "status --porcelain=v1 -uall -- " + pathspec, out statusExit);
+            if (statusExit == 0 && string.IsNullOrWhiteSpace(status))
+            {
+                return true;
+            }
+
+            error = FirstGitError(status, checkout, reset, clean);
+            if (string.IsNullOrWhiteSpace(error))
+            {
+                error = "Selected path still has workspace changes.";
+            }
+            return false;
+        }
+
+        private static string FirstGitError(params string[] outputs)
+        {
+            if (outputs == null) return null;
+            foreach (var output in outputs)
+            {
+                if (string.IsNullOrWhiteSpace(output)) continue;
+                var trimmed = output.Trim();
+                if (trimmed.StartsWith("fatal:", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.StartsWith("error:", StringComparison.OrdinalIgnoreCase))
+                {
+                    return trimmed;
+                }
+            }
+            return null;
+        }
+
+        private static string QuoteGitPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return "\"\"";
+            return "\"" + path.Replace("\"", "\\\"") + "\"";
         }
 
         private string RunGit(string workingDirectory, string arguments, out int exitCode)
