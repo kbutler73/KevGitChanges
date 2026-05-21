@@ -1,0 +1,89 @@
+name: Create Extension Release On Merge
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest # Required for Visual Studio / MSBuild tooling
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup NuGet
+        uses: nuget/setup-nuget@v1
+
+      - name: Determine Next Version
+        id: versioning
+        shell: powershell
+        run: |
+          git fetch --tags
+          $latestTag = git describe --tags (git rev-list --tags --max-count=1) 2>$null
+          if (-not $latestTag) { $latestTag = "1.0.0" }
+          
+          # Clean 'v' prefix if present for parsing
+          $cleanTag = $latestTag -replace '^v', ''
+          $version = [version]$cleanTag
+          
+          # Increment patch version (e.g., 1.0.3 -> 1.0.4)
+          $newVersion = New-Object Version($version.Major, $version.Minor, ($version.Build + 1))
+          $newTag = "$newVersion"
+          
+          Write-Output "NEW_TAG=$newTag" >> $env:GITHUB_ENV
+          Write-Output "Calculated next release version: $newTag"
+
+      - name: Update VSIX Manifest Version
+        shell: powershell
+        run: |
+          # Find the source manifest file
+          $manifestPath = Get-ChildItem -Recurse -Filter "source.extension.vsixmanifest" | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $manifestPath) { throw "source.extension.vsixmanifest not found!" }
+          
+          # Load XML, update Identity Version attribute, and save back
+          [xml]$xml = Get-Content $manifestPath
+          $xml.PackageManifest.Metadata.Identity.Version = "${{ env.NEW_TAG }}"
+          $xml.Save($manifestPath)
+          Write-Output "Updated VSIX manifest version to ${{ env.NEW_TAG }}"
+
+      - name: Restore NuGet Packages
+        run: nuget restore
+
+      - name: Build VSIX Project
+        run: msbuild /p:Configuration=Release /p:DeployExtension=false
+
+      - name: Prepare and Rename VSIX Artifact
+        shell: powershell
+        run: |
+          # Locate the freshly built VSIX file in bin/Release folders
+          $vsixFile = Get-ChildItem -Recurse -Filter "*.vsix" | Where-Object { $_.FullName -like "*bin\Release*" } | Select-Object -First 1
+          if (-not $vsixFile) { throw "Compiled VSIX file not found in Release bin!" }
+          
+          # Define clean destination name: KevGitChanges v1.0.4.vsix
+          $targetName = "KevGitChanges v${{ env.NEW_TAG }}.vsix"
+          $targetPath = Join-Path $vsixFile.DirectoryName $targetName
+          
+          # Rename file
+          Rename-Item -Path $vsixFile.FullName -NewName $targetName
+          
+          # Pass the definitive path down to the release step
+          Write-Output "VSIX_PATH=$targetPath" >> $env:GITHUB_ENV
+          Write-Output "Prepared release file at: $targetPath"
+
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ env.NEW_TAG }}
+          name: Release v${{ env.NEW_TAG }}
+          artifacts: ${{ env.VSIX_PATH }}
+          generateReleaseNotes: true
+          token: ${{ secrets.GITHUB_TOKEN }}
