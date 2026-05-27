@@ -2412,6 +2412,38 @@ namespace KevGitChanges
         [DllImport("gdi32.dll", SetLastError = true)]
         private static extern bool DeleteObject(IntPtr hObject);
 
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr ILCreateFromPath(string pszPath);
+
+        [DllImport("shell32.dll")]
+        private static extern int SHOpenFolderAndSelectItems(
+            IntPtr pidlFolder,
+            uint cidl,
+            [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 1)] IntPtr[] apidl,
+            uint dwFlags);
+
+        [DllImport("shell32.dll", EntryPoint = "SHOpenFolderAndSelectItems")]
+        private static extern int SHOpenFolderAndSelectItemsAbsolute(
+            IntPtr pidlFolder,
+            uint cidl,
+            IntPtr apidl,
+            uint dwFlags);
+
+        [DllImport("shell32.dll")]
+        private static extern void ILFree(IntPtr pidl);
+
+        [DllImport("shell32.dll")]
+        private static extern IntPtr ILFindLastID(IntPtr pidl);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr ShellExecute(
+            IntPtr hwnd,
+            string lpOperation,
+            string lpFile,
+            string lpParameters,
+            string lpDirectory,
+            int nShowCmd);
+
         private static void FreezeBrush(Brush brush)
         {
             if (brush is Freezable freezable && freezable.CanFreeze)
@@ -2464,6 +2496,127 @@ namespace KevGitChanges
                         System.Diagnostics.Process.Start(full);
                     }
                 }
+            }
+        }
+
+        private void OpenInExplorer_Click(object sender, RoutedEventArgs e)
+        {
+            TreeNode node = null;
+            try
+            {
+                node = LocalTree?.SelectedItem as TreeNode;
+            }
+            catch { }
+
+            if (node == null || string.IsNullOrWhiteSpace(node.FullPath)) return;
+
+            var full = ResolveWorkspacePath(node.FullPath);
+            if (string.IsNullOrWhiteSpace(full)) return;
+            full = System.IO.Path.GetFullPath(full);
+
+            try
+            {
+                if (node.IsDirectory)
+                {
+                    if (!System.IO.Directory.Exists(full))
+                    {
+                        UpdateStatus("Folder does not exist in the workspace:\n\n" + full);
+                        return;
+                    }
+
+                    WriteOutput("Explorer diagnostics: opening folder " + full);
+                    OpenFolderInExplorer(full);
+                    return;
+                }
+
+                if (System.IO.File.Exists(full))
+                {
+                    WriteOutput("Explorer diagnostics: selecting file " + full);
+                    OpenExplorerSelect(full);
+                    return;
+                }
+
+                var containingFolder = System.IO.Path.GetDirectoryName(full);
+                if (!string.IsNullOrWhiteSpace(containingFolder) && System.IO.Directory.Exists(containingFolder))
+                {
+                    WriteOutput("Explorer diagnostics: selected file missing; opening folder " + containingFolder);
+                    OpenFolderInExplorer(containingFolder);
+                    return;
+                }
+
+                UpdateStatus("File does not exist in the workspace:\n\n" + full);
+            }
+            catch (Exception ex)
+            {
+                UpdateStatus("Unable to open File Explorer: " + ex.Message);
+            }
+        }
+
+        private static void OpenFolderInExplorer(string folderPath)
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(folderPath)
+            {
+                UseShellExecute = true
+            });
+        }
+
+        private static bool OpenFolderAndSelectItem(string itemPath)
+        {
+            var folderPidl = IntPtr.Zero;
+            var itemPidl = IntPtr.Zero;
+            try
+            {
+                var folderPath = System.IO.Path.GetDirectoryName(itemPath);
+                if (string.IsNullOrWhiteSpace(folderPath))
+                {
+                    return false;
+                }
+
+                itemPidl = ILCreateFromPath(itemPath);
+                if (itemPidl != IntPtr.Zero)
+                {
+                    var absoluteHr = SHOpenFolderAndSelectItemsAbsolute(itemPidl, 0, IntPtr.Zero, 0);
+                    if (absoluteHr == 0) return true;
+                }
+
+                folderPidl = ILCreateFromPath(folderPath);
+                var childPidl = itemPidl == IntPtr.Zero ? IntPtr.Zero : ILFindLastID(itemPidl);
+                if (folderPidl != IntPtr.Zero && childPidl != IntPtr.Zero)
+                {
+                    var hr = SHOpenFolderAndSelectItems(folderPidl, 1, new[] { childPidl }, 0);
+                    if (hr == 0) return true;
+                }
+            }
+            finally
+            {
+                if (itemPidl != IntPtr.Zero) ILFree(itemPidl);
+                if (folderPidl != IntPtr.Zero) ILFree(folderPidl);
+            }
+
+            return false;
+        }
+
+        private static void OpenExplorerSelect(string itemPath)
+        {
+            if (OpenFolderAndSelectItem(itemPath))
+            {
+                return;
+            }
+
+            try
+            {
+                var result = ShellExecute(IntPtr.Zero, "open", "explorer.exe", "/select, \"" + itemPath + "\"", null, 1);
+                if (result.ToInt64() > 32) return;
+            }
+            catch
+            {
+                // fall back to opening the containing folder below
+            }
+
+            var folder = System.IO.Path.GetDirectoryName(itemPath);
+            if (!string.IsNullOrWhiteSpace(folder))
+            {
+                OpenFolderInExplorer(folder);
             }
         }
 
@@ -2577,7 +2730,12 @@ namespace KevGitChanges
 
                 var showFileActions = node.IsFile ? Visibility.Visible : Visibility.Collapsed;
                 if (OpenFileMenu != null) OpenFileMenu.Visibility = showFileActions;
-                if (OpenFileSeparator != null) OpenFileSeparator.Visibility = showFileActions;
+                if (OpenInExplorerMenu != null)
+                {
+                    OpenInExplorerMenu.Header = node.IsDirectory ? "Open folder in File Explorer" : "Show file in File Explorer";
+                    OpenInExplorerMenu.Visibility = Visibility.Visible;
+                }
+                if (OpenFileSeparator != null) OpenFileSeparator.Visibility = Visibility.Visible;
                 if (CompareSeparator != null) CompareSeparator.Visibility = showFileActions;
                 if (CompareWithLocalMenu != null) CompareWithLocalMenu.Visibility = showFileActions;
                 if (CompareWithRemoteMenu != null) CompareWithRemoteMenu.Visibility = showFileActions;
