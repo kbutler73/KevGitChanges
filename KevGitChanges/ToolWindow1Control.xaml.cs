@@ -2785,7 +2785,8 @@ namespace KevGitChanges
             if (IsMockCompareEnabled())
             {
                 WriteCompareDiagnostics(file, leftScope, rightScope, left, right, "Mock compare enabled");
-                if (!TryLaunchGitDifftool(file, left, right))
+                if (!TryLaunchConfiguredDifftool(file, leftScope, rightScope) &&
+                    !TryLaunchGitDifftool(file, left, right))
                 {
                     UpdateStatus("Unable to launch git difftool.");
                 }
@@ -2803,7 +2804,8 @@ namespace KevGitChanges
 
             try
             {
-                if (!TryLaunchGitDifftool(file, left, right))
+                if (!TryLaunchConfiguredDifftool(file, leftScope, rightScope) &&
+                    !TryLaunchGitDifftool(file, left, right))
                 {
                     UpdateStatus("Unable to launch git difftool.");
                 }
@@ -3014,6 +3016,13 @@ namespace KevGitChanges
             public string Label;
         }
 
+        private struct DifftoolConfig
+        {
+            public string Tool;
+            public string Command;
+            public string Path;
+        }
+
         private bool LaunchVsCompare(string file, string leftScope, string rightScope)
         {
             try
@@ -3072,19 +3081,19 @@ namespace KevGitChanges
                 {
                     return new CompareFile { Path = full, Label = label };
                 }
-                var tempMissing = WriteTempFile(relPath, "workspace", string.Empty);
+                var tempMissing = WriteTempFile(relPath, "workspace", GetTempFileRoleLabel(scopeKey, "workspace"), string.Empty);
                 return new CompareFile { Path = tempMissing, Label = label + " (missing)" };
             }
 
             var refName = ScopeToRef(scopeKey);
             if (string.IsNullOrWhiteSpace(refName))
             {
-                var tempEmpty = WriteTempFile(relPath, "unknown", string.Empty);
+                var tempEmpty = WriteTempFile(relPath, "unknown", GetTempFileRoleLabel(scopeKey, "unknown"), string.Empty);
                 return new CompareFile { Path = tempEmpty, Label = label + " (missing)" };
             }
 
             var content = GetFileContentAtRef(workDir, refName, relPath, out bool ok);
-            var tempPath = WriteTempFile(relPath, refName, content ?? string.Empty);
+            var tempPath = WriteTempFile(relPath, refName, GetTempFileRoleLabel(scopeKey, refName), content ?? string.Empty);
             return new CompareFile { Path = tempPath, Label = ok ? label : (label + " (missing)") };
         }
 
@@ -3105,7 +3114,7 @@ namespace KevGitChanges
             return payload;
         }
 
-        private string WriteTempFile(string relPath, string refName, string content)
+        private string WriteTempFile(string relPath, string refName, string roleLabel, string content)
         {
             var tempRoot = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "KevGitChangesDiff");
             if (!System.IO.Directory.Exists(tempRoot)) System.IO.Directory.CreateDirectory(tempRoot);
@@ -3117,9 +3126,250 @@ namespace KevGitChanges
             var key = $"{refName}:{relPath}".ToLowerInvariant();
             var hash = ComputeSha1(key);
             var safeBase = SanitizeFileName(baseName);
-            var tempFile = System.IO.Path.Combine(tempRoot, $"{safeBase}.{hash}{ext}");
+            var safeRole = SanitizeFileName(string.IsNullOrWhiteSpace(roleLabel) ? (refName ?? "ref") : roleLabel);
+            var tempFile = System.IO.Path.Combine(tempRoot, $"{safeBase}.{safeRole}.{hash}{ext}");
             System.IO.File.WriteAllText(tempFile, content ?? string.Empty);
             return tempFile;
+        }
+
+        private string GetTempFileRoleLabel(string scopeKey, string refName)
+        {
+            switch ((scopeKey ?? string.Empty).Trim())
+            {
+                case "Workspace":
+                    return "workspace";
+
+                case "Local":
+                    return "local_" + (string.IsNullOrWhiteSpace(currentBranch) ? "HEAD" : currentBranch);
+
+                case "Remote":
+                    return "remote_" + (string.IsNullOrWhiteSpace(refName) ? (selectedRemote + "_" + currentBranch) : refName);
+
+                case "Main":
+                    return "base_" + (string.IsNullOrWhiteSpace(refName) ? currentBaseBranch : refName);
+
+                default:
+                    return string.IsNullOrWhiteSpace(refName) ? "ref" : refName;
+            }
+        }
+
+        private bool TryLaunchConfiguredDifftool(string file, string leftScope, string rightScope)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(currentWorkDir)) return false;
+                var config = GetConfiguredDifftool(currentWorkDir);
+                if (string.IsNullOrWhiteSpace(config.Tool) &&
+                    string.IsNullOrWhiteSpace(config.Command) &&
+                    string.IsNullOrWhiteSpace(config.Path))
+                {
+                    return false;
+                }
+
+                var left = GetFileForScope(currentWorkDir, leftScope, file);
+                var right = GetFileForScope(currentWorkDir, rightScope, file);
+
+                if (!string.IsNullOrWhiteSpace(config.Command))
+                {
+                    var leftLabel = GetExternalCompareLabel(file, leftScope, left.Label);
+                    var rightLabel = GetExternalCompareLabel(file, rightScope, right.Label);
+                    var command = BuildDifftoolCommand(
+                        config.Command,
+                        left.Path,
+                        right.Path,
+                        file,
+                        leftLabel,
+                        rightLabel);
+                    if (IsBeyondCompareTool(config.Tool))
+                    {
+                        command = AddBeyondCompareTitles(command, leftLabel, rightLabel);
+                    }
+                    WriteOutput("Compare diagnostics: launching configured difftool command.");
+                    WriteOutput($"  command: {command}");
+                    var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/S /C " + QuoteCmdCommand(command))
+                    {
+                        RedirectStandardError = true,
+                        RedirectStandardOutput = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
+                        WorkingDirectory = currentWorkDir
+                    };
+                    using (var process = System.Diagnostics.Process.Start(psi))
+                    {
+                        return DidLaunch(process, out var launchOutput, out var launchError);
+                    }
+                }
+
+                var executable = !string.IsNullOrWhiteSpace(config.Path) ? config.Path.Trim() : config.Tool.Trim();
+                var directLeftLabel = GetExternalCompareLabel(file, leftScope, left.Label);
+                var directRightLabel = GetExternalCompareLabel(file, rightScope, right.Label);
+                var args = QuoteProcessArg(left.Path) + " " + QuoteProcessArg(right.Path);
+                if (IsBeyondCompareTool(config.Tool))
+                {
+                    executable = ResolveBeyondCompareExecutable(executable);
+                    args += " /title1=" + QuoteProcessArg(directLeftLabel) + " /title2=" + QuoteProcessArg(directRightLabel);
+                }
+                WriteOutput("Compare diagnostics: launching configured difftool path.");
+                WriteOutput($"  executable: {executable}");
+                WriteOutput($"  args: {args}");
+                var directPsi = new System.Diagnostics.ProcessStartInfo(executable, args)
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
+                    WorkingDirectory = currentWorkDir
+                };
+                using (var process = System.Diagnostics.Process.Start(directPsi))
+                {
+                    return DidLaunch(process, out var launchOutput, out var launchError);
+                }
+            }
+            catch (Exception ex)
+            {
+                WriteOutput("Compare diagnostics: configured difftool direct launch failed: " + ex.Message);
+                return false;
+            }
+        }
+
+        private DifftoolConfig GetConfiguredDifftool(string workDir)
+        {
+            var config = new DifftoolConfig();
+            if (string.IsNullOrWhiteSpace(workDir)) return config;
+
+            var tool = RunGit(workDir, "config --get diff.tool");
+            if (IsGitError(tool) || string.IsNullOrWhiteSpace(tool)) return config;
+
+            config.Tool = tool.Trim();
+            config.Command = RunGit(workDir, $"config --get difftool.{config.Tool}.cmd");
+            if (IsGitError(config.Command)) config.Command = null;
+            if (!string.IsNullOrWhiteSpace(config.Command)) config.Command = config.Command.Trim();
+
+            config.Path = RunGit(workDir, $"config --get difftool.{config.Tool}.path");
+            if (IsGitError(config.Path)) config.Path = null;
+            if (!string.IsNullOrWhiteSpace(config.Path)) config.Path = config.Path.Trim();
+
+            return config;
+        }
+
+        private static string BuildDifftoolCommand(string configuredCommand, string leftPath, string rightPath, string mergedPath, string leftLabel, string rightLabel)
+        {
+            var command = configuredCommand ?? string.Empty;
+            command = command.Replace("--label \"LOCAL|REMOTE\"", "--label " + QuoteProcessArg(leftLabel ?? "LOCAL") + " --label " + QuoteProcessArg(rightLabel ?? "REMOTE"));
+            command = command.Replace("--label 'LOCAL|REMOTE'", "--label " + QuoteProcessArg(leftLabel ?? "LOCAL") + " --label " + QuoteProcessArg(rightLabel ?? "REMOTE"));
+            command = command.Replace("\"LOCAL|REMOTE\"", QuoteProcessArg((leftLabel ?? "LOCAL") + "|" + (rightLabel ?? "REMOTE")));
+            command = command.Replace("'LOCAL|REMOTE'", QuoteProcessArg((leftLabel ?? "LOCAL") + "|" + (rightLabel ?? "REMOTE")));
+            ReplaceDifftoolPlaceholder(ref command, "LOCAL", leftPath);
+            ReplaceDifftoolPlaceholder(ref command, "REMOTE", rightPath);
+            ReplaceDifftoolPlaceholder(ref command, "BASE", leftPath);
+            ReplaceDifftoolPlaceholder(ref command, "MERGED", mergedPath);
+            return command;
+        }
+
+        private static bool IsBeyondCompareTool(string tool)
+        {
+            var t = (tool ?? string.Empty).Trim();
+            return t.Equals("bc", StringComparison.OrdinalIgnoreCase) ||
+                   t.Equals("bc3", StringComparison.OrdinalIgnoreCase) ||
+                   t.Equals("bc4", StringComparison.OrdinalIgnoreCase) ||
+                   t.Equals("bcomp", StringComparison.OrdinalIgnoreCase) ||
+                   t.Equals("bcompare", StringComparison.OrdinalIgnoreCase) ||
+                   t.Equals("beyondcompare", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string AddBeyondCompareTitles(string command, string leftLabel, string rightLabel)
+        {
+            if (string.IsNullOrWhiteSpace(command)) return command;
+            command = ReplaceOrAddBeyondCompareTitle(command, "title1", leftLabel ?? "Left");
+            command = ReplaceOrAddBeyondCompareTitle(command, "title2", rightLabel ?? "Right");
+            return command;
+        }
+
+        private static string ReplaceOrAddBeyondCompareTitle(string command, string titleName, string title)
+        {
+            var pattern = @"(?i)(/" + titleName + @"=)(""[^""]*""|\S+)";
+            if (System.Text.RegularExpressions.Regex.IsMatch(command, pattern))
+            {
+                return System.Text.RegularExpressions.Regex.Replace(
+                    command,
+                    pattern,
+                    match => match.Groups[1].Value + QuoteProcessArg(title));
+            }
+
+            return command + " /" + titleName + "=" + QuoteProcessArg(title);
+        }
+
+        private static string ResolveBeyondCompareExecutable(string executable)
+        {
+            if (!string.IsNullOrWhiteSpace(executable) && System.IO.File.Exists(executable)) return executable;
+
+            var candidates = new[]
+            {
+                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Beyond Compare 3", "BComp.exe"),
+                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Beyond Compare 3", "BCompare.exe"),
+                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Beyond Compare 3", "BComp.exe"),
+                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Beyond Compare 3", "BCompare.exe")
+            };
+
+            foreach (var candidate in candidates)
+            {
+                if (System.IO.File.Exists(candidate)) return candidate;
+            }
+
+            return executable;
+        }
+
+        private string GetExternalCompareLabel(string file, string scopeKey, string fallbackLabel)
+        {
+            if (string.Equals((scopeKey ?? string.Empty).Trim(), "Workspace", StringComparison.OrdinalIgnoreCase))
+            {
+                var fullPath = ResolveWorkspacePath(file);
+                return string.IsNullOrWhiteSpace(fullPath) ? (fallbackLabel ?? "Workspace") : fullPath;
+            }
+
+            return fallbackLabel;
+        }
+
+        private static void ReplaceDifftoolPlaceholder(ref string command, string name, string value)
+        {
+            var quoted = QuoteProcessArg(value ?? string.Empty);
+            command = command.Replace("\"$" + name + "\"", quoted);
+            command = command.Replace("'$" + name + "'", quoted);
+            command = command.Replace("$" + name, quoted);
+            command = command.Replace("%" + name + "%", quoted);
+        }
+
+        private static string QuoteProcessArg(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return "\"\"";
+            return "\"" + value.Replace("\"", "\\\"") + "\"";
+        }
+
+        private static string QuoteCmdCommand(string command)
+        {
+            return "\"" + (command ?? string.Empty) + "\"";
+        }
+
+        private bool DidLaunch(System.Diagnostics.Process process, out string output, out string error)
+        {
+            output = null;
+            error = null;
+            if (process == null) return false;
+            try
+            {
+                if (!process.WaitForExit(750)) return true;
+                output = process.StartInfo.RedirectStandardOutput ? process.StandardOutput.ReadToEnd() : null;
+                error = process.StartInfo.RedirectStandardError ? process.StandardError.ReadToEnd() : null;
+                if (!string.IsNullOrWhiteSpace(output)) WriteOutput("Compare diagnostics stdout: " + output.Trim());
+                if (!string.IsNullOrWhiteSpace(error)) WriteOutput("Compare diagnostics stderr: " + error.Trim());
+                if (process.ExitCode != 0) WriteOutput("Compare diagnostics: process exited with code " + process.ExitCode);
+                return process.ExitCode == 0;
+            }
+            catch (Exception ex)
+            {
+                WriteOutput("Compare diagnostics: unable to observe difftool process: " + ex.Message);
+                return true;
+            }
         }
 
         private bool TryLaunchGitDifftool(string file, string leftRef, string rightRef)
@@ -3293,7 +3543,6 @@ namespace KevGitChanges
         {
             if (string.IsNullOrWhiteSpace(line)) return;
             if (line.StartsWith("Icon diagnostics:", StringComparison.OrdinalIgnoreCase) ||
-                line.StartsWith("Compare diagnostics", StringComparison.OrdinalIgnoreCase) ||
                 line.StartsWith("git ", StringComparison.OrdinalIgnoreCase))
             {
                 return;
