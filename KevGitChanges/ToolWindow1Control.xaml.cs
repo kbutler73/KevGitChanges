@@ -2852,7 +2852,7 @@ namespace KevGitChanges
         {
             try
             {
-                UpdateCompareCombos("Workspace", "Local");
+                UpdateCompareCombos("Local", "Workspace");
             }
             catch { }
         }
@@ -2931,6 +2931,7 @@ namespace KevGitChanges
         private void CompareScopes(string file, string leftScope, string rightScope)
         {
             if (string.IsNullOrWhiteSpace(currentWorkDir) || string.IsNullOrWhiteSpace(file)) return;
+            NormalizeCompareScopes(ref leftScope, ref rightScope);
             var left = ScopeToRef(leftScope);
             var right = ScopeToRef(rightScope);
             var validationError = GetCompareValidationError(file, leftScope, left, rightScope, right);
@@ -2971,6 +2972,38 @@ namespace KevGitChanges
             catch (System.Exception ex)
             {
                 UpdateStatus("Unable to launch difftool: " + ex.Message);
+            }
+        }
+
+        private static void NormalizeCompareScopes(ref string leftScope, ref string rightScope)
+        {
+            var leftRank = GetCompareScopeAgeRank(leftScope);
+            var rightRank = GetCompareScopeAgeRank(rightScope);
+            if (!leftRank.HasValue || !rightRank.HasValue || leftRank.Value <= rightRank.Value) return;
+
+            var originalLeft = leftScope;
+            leftScope = rightScope;
+            rightScope = originalLeft;
+        }
+
+        private static int? GetCompareScopeAgeRank(string scope)
+        {
+            switch ((scope ?? string.Empty).Trim())
+            {
+                case "Main":
+                    return 0;
+
+                case "Remote":
+                    return 1;
+
+                case "Local":
+                    return 2;
+
+                case "Workspace":
+                    return 3;
+
+                default:
+                    return null;
             }
         }
 
@@ -3856,7 +3889,7 @@ namespace KevGitChanges
                 if (ShowLocalLabel != null) ShowLocalLabel.Text = GetScopeFilterLabel("Local");
                 if (ShowRemoteLabel != null) ShowRemoteLabel.Text = GetScopeFilterLabel("Remote");
 
-                UpdateCompareCombos("Workspace", "Local");
+                UpdateCompareCombos("Local", "Workspace");
                 UpdateCompareMenuHeader();
 
                 if (CompareWithLocalMenu != null)
@@ -3917,6 +3950,7 @@ namespace KevGitChanges
             if (CompareSelectionMenu == null) return;
             var fromKey = GetScopeKeyFromCombo(CompareFromCombo);
             var toKey = GetScopeKeyFromCombo(CompareToCombo);
+            NormalizeCompareScopes(ref fromKey, ref toKey);
             var fromLabel = GetScopeDisplayForCompareSelection(fromKey) ?? "A";
             var toLabel = GetScopeDisplayForCompareSelection(toKey) ?? "B";
             CompareSelectionMenu.Header = $"Compare {fromLabel} to {toLabel}";
