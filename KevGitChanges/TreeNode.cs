@@ -8,19 +8,24 @@ namespace KevGitChanges
     {
         public string Name { get; set; }
         public string FullPath { get; set; }
+        // Absolute filesystem path for tooltips
+        public string FullPathAbsolute { get; set; }
         public List<TreeNode> Children { get; } = new List<TreeNode>();
         public ImageSource Icon { get; set; }
         public ImageMoniker IconMoniker { get; set; }
         public int Depth { get; set; }
         public string WStatus { get; set; }
+        public string SStatus { get; set; }
         public string LStatus { get; set; }
         public string RStatus { get; set; }
         public string MStatus { get; set; }
         public string WToolTip { get; set; }
+        public string SToolTip { get; set; }
         public string LToolTip { get; set; }
         public string RToolTip { get; set; }
         public string MToolTip { get; set; }
         public Brush WBrush { get; set; }
+        public Brush SBrush { get; set; }
         public Brush LBrush { get; set; }
         public Brush RBrush { get; set; }
         public Brush MBrush { get; set; }
@@ -28,5 +33,6 @@ namespace KevGitChanges
         public bool IsDirectory { get; set; }
         public bool IsFile => !IsDirectory && Children.Count == 0 && !string.IsNullOrEmpty(FullPath);
         public bool IsDeleted { get; set; } // True if file is deleted
+        public bool HasWorkspaceAndStaged => !string.IsNullOrWhiteSpace(WStatus) && !string.IsNullOrWhiteSpace(SStatus);
     }
 }
