@@ -72,8 +72,10 @@ namespace KevGitChanges
         private Visibility remoteColumnVisibility = Visibility.Visible;
         private int lastVisibleItemCount;
         private int lastHiddenItemCount;
+
         private readonly System.Collections.Generic.List<FrameworkElement> statusPresenters =
             new System.Collections.Generic.List<FrameworkElement>();
+
         private double treeHorizontalOffset;
         private double treeViewportWidth;
 
@@ -106,6 +108,7 @@ namespace KevGitChanges
         private enum ChangeScope
         {
             Workspace,
+            Staged,
             Local,
             Remote,
             Main
@@ -2657,6 +2660,13 @@ namespace KevGitChanges
             CompareScopes(file, "Workspace", "Local");
         }
 
+        private void CompareWithStaged_Click(object sender, RoutedEventArgs e)
+        {
+            var file = GetSelectedFile();
+            if (string.IsNullOrWhiteSpace(file)) return;
+            CompareScopes(file, "Workspace", "Staged");
+        }
+
         private void RevertWorkspace_Click(object sender, RoutedEventArgs e)
         {
             TreeNode node = null;
@@ -2737,6 +2747,7 @@ namespace KevGitChanges
                 }
                 if (OpenFileSeparator != null) OpenFileSeparator.Visibility = Visibility.Visible;
                 if (CompareSeparator != null) CompareSeparator.Visibility = showFileActions;
+                if (CompareWithStagedMenu != null) CompareWithStagedMenu.Visibility = showFileActions;
                 if (CompareWithLocalMenu != null) CompareWithLocalMenu.Visibility = showFileActions;
                 if (CompareWithRemoteMenu != null) CompareWithRemoteMenu.Visibility = showFileActions;
                 if (CompareWithMainMenu != null) CompareWithMainMenu.Visibility = showFileActions;
@@ -2999,8 +3010,11 @@ namespace KevGitChanges
                 case "Local":
                     return 2;
 
-                case "Workspace":
+                case "Staged":
                     return 3;
+
+                case "Workspace":
+                    return 4;
 
                 default:
                     return null;
@@ -3013,6 +3027,9 @@ namespace KevGitChanges
             {
                 case "Workspace":
                     return null;
+
+                case "Staged":
+                    return ":";
 
                 case "Local":
                     return "HEAD";
@@ -3031,6 +3048,14 @@ namespace KevGitChanges
         private static string BuildDiffArgs(string leftRef, string rightRef, string file)
         {
             if (string.IsNullOrWhiteSpace(file)) return null;
+            if (string.Equals(leftRef, ":", StringComparison.Ordinal) && string.IsNullOrWhiteSpace(rightRef))
+            {
+                return $"difftool -y -- \"{file}\"";
+            }
+            if (string.IsNullOrWhiteSpace(leftRef) && string.Equals(rightRef, ":", StringComparison.Ordinal))
+            {
+                return $"difftool -y -- \"{file}\"";
+            }
             if (string.IsNullOrWhiteSpace(leftRef) && string.IsNullOrWhiteSpace(rightRef))
             {
                 return null;
@@ -3049,12 +3074,25 @@ namespace KevGitChanges
         private string GetCompareValidationError(string file, string leftScope, string leftRef, string rightScope, string rightRef)
         {
             var leftMissing = GetMissingCompareTargetLabel(file, leftScope, leftRef);
+            var rightMissing = GetMissingCompareTargetLabel(file, rightScope, rightRef);
+
+            if (string.Equals(leftMissing, "Workspace", StringComparison.OrdinalIgnoreCase) &&
+                string.IsNullOrWhiteSpace(rightMissing))
+            {
+                return null;
+            }
+
+            if (string.Equals(rightMissing, "Workspace", StringComparison.OrdinalIgnoreCase) &&
+                string.IsNullOrWhiteSpace(leftMissing))
+            {
+                return null;
+            }
+
             if (!string.IsNullOrWhiteSpace(leftMissing))
             {
                 return $"Cannot compare because {leftMissing} does not contain {file}.";
             }
 
-            var rightMissing = GetMissingCompareTargetLabel(file, rightScope, rightRef);
             if (!string.IsNullOrWhiteSpace(rightMissing))
             {
                 return $"Cannot compare because {rightMissing} does not contain {file}.";
@@ -3071,6 +3109,12 @@ namespace KevGitChanges
             {
                 var fullPath = ResolveWorkspacePath(file);
                 return System.IO.File.Exists(fullPath) ? null : "Workspace";
+            }
+
+            if (string.Equals(scopeKey, "Staged", StringComparison.OrdinalIgnoreCase))
+            {
+                GetFileContentFromIndex(currentWorkDir, file, out bool success);
+                return success ? null : "Staged";
             }
 
             if (string.IsNullOrWhiteSpace(refName)) return GetScopeDisplay(scopeKey) ?? scopeKey;
@@ -3276,6 +3320,13 @@ namespace KevGitChanges
                 return new CompareFile { Path = tempMissing, Label = label + " (missing)" };
             }
 
+            if (string.Equals(scopeKey, "Staged", StringComparison.OrdinalIgnoreCase))
+            {
+                var stagedContent = GetFileContentFromIndex(workDir, relPath, out bool stagedOk);
+                var stagedTempPath = WriteTempFile(relPath, "index", GetTempFileRoleLabel(scopeKey, "index"), stagedContent ?? string.Empty);
+                return new CompareFile { Path = stagedTempPath, Label = stagedOk ? label : (label + " (missing)") };
+            }
+
             var refName = ScopeToRef(scopeKey);
             if (string.IsNullOrWhiteSpace(refName))
             {
@@ -3295,6 +3346,23 @@ namespace KevGitChanges
             var gitPath = relPath.Replace('\\', '/');
             var payload = RunGit(workDir, $"show {refName}:\"{gitPath}\"");
             if (string.IsNullOrWhiteSpace(payload)) return null;
+            var trimmed = payload.TrimStart();
+            if (trimmed.StartsWith("fatal:", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("error:", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+            ok = true;
+            return payload;
+        }
+
+        private string GetFileContentFromIndex(string workDir, string relPath, out bool ok)
+        {
+            ok = false;
+            if (string.IsNullOrWhiteSpace(workDir) || string.IsNullOrWhiteSpace(relPath)) return null;
+            var gitPath = relPath.Replace('\\', '/');
+            var payload = RunGit(workDir, $"show :\"{gitPath}\"", out int exitCode);
+            if (exitCode != 0) return null;
             var trimmed = payload.TrimStart();
             if (trimmed.StartsWith("fatal:", StringComparison.OrdinalIgnoreCase) ||
                 trimmed.StartsWith("error:", StringComparison.OrdinalIgnoreCase))
@@ -3329,6 +3397,9 @@ namespace KevGitChanges
             {
                 case "Workspace":
                     return "workspace";
+
+                case "Staged":
+                    return "staged_index";
 
                 case "Local":
                     return "local_" + (string.IsNullOrWhiteSpace(currentBranch) ? "HEAD" : currentBranch);
@@ -3841,6 +3912,9 @@ namespace KevGitChanges
                 case "Workspace":
                     return "Workspace";
 
+                case "Staged":
+                    return "Staged";
+
                 case "Local":
                     return string.IsNullOrWhiteSpace(currentBranch) ? "Local" : $"{currentBranch} (local)";
 
@@ -3863,6 +3937,9 @@ namespace KevGitChanges
                 case "Workspace":
                     return "Workspace";
 
+                case "Staged":
+                    return "Staged";
+
                 case "Local":
                     return string.IsNullOrWhiteSpace(currentBranch) ? "Local" : currentBranch;
 
@@ -3881,6 +3958,7 @@ namespace KevGitChanges
         private void UpdateScopeLabels()
         {
             var localLabel = GetScopeDisplay("Local");
+            var stagedLabel = GetScopeDisplay("Staged");
             var remoteLabel = GetScopeDisplay("Remote");
             var mainLabel = GetScopeDisplay("Main");
             this.Dispatcher.Invoke(() =>
@@ -3895,6 +3973,10 @@ namespace KevGitChanges
                 if (CompareWithLocalMenu != null)
                 {
                     CompareWithLocalMenu.Header = $"Compare vs {localLabel}";
+                }
+                if (CompareWithStagedMenu != null)
+                {
+                    CompareWithStagedMenu.Header = $"Compare vs {stagedLabel}";
                 }
                 if (CompareWithMainMenu != null)
                 {
@@ -3925,6 +4007,7 @@ namespace KevGitChanges
             return new System.Collections.Generic.List<ComboBoxItem>
             {
                 new ComboBoxItem { Tag = "Workspace", Content = GetScopeDisplay("Workspace") },
+                new ComboBoxItem { Tag = "Staged", Content = GetScopeDisplay("Staged") },
                 new ComboBoxItem { Tag = "Local", Content = GetScopeDisplay("Local") },
                 new ComboBoxItem { Tag = "Remote", Content = GetScopeDisplay("Remote") },
                 new ComboBoxItem { Tag = "Main", Content = GetScopeDisplay("Main") }

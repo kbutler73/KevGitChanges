@@ -518,6 +518,7 @@
                             <Separator />
                             <MenuItem Name="CompareSelectionMenu" Header="Compare selection (A vs B)" Click="CompareSelected_Click" />
                             <Separator Name="CompareSeparator" />
+                            <MenuItem Name="CompareWithStagedMenu" Header="Compare vs Staged" Click="CompareWithStaged_Click" />
                             <MenuItem Name="CompareWithLocalMenu" Header="Compare vs Local" Click="CompareWithLocal_Click" />
                             <MenuItem Name="CompareWithRemoteMenu" Header="Compare vs Remote" Click="CompareWithRemote_Click" />
                             <MenuItem Name="CompareWithMainMenu" Header="Compare vs Base" Click="CompareWithMain_Click" />
