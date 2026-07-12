@@ -70,6 +70,7 @@ namespace KevGitChanges
         private Visibility workspaceColumnVisibility = Visibility.Visible;
         private Visibility localColumnVisibility = Visibility.Visible;
         private Visibility remoteColumnVisibility = Visibility.Visible;
+        private Visibility stagedColumnVisibility = Visibility.Visible;
         private int lastVisibleItemCount;
         private int lastHiddenItemCount;
 
@@ -146,6 +147,17 @@ namespace KevGitChanges
                 if (remoteColumnVisibility == value) return;
                 remoteColumnVisibility = value;
                 OnPropertyChanged(nameof(RemoteColumnVisibility));
+            }
+        }
+
+        public Visibility StagedColumnVisibility
+        {
+            get { return stagedColumnVisibility; }
+            private set
+            {
+                if (stagedColumnVisibility == value) return;
+                stagedColumnVisibility = value;
+                OnPropertyChanged(nameof(StagedColumnVisibility));
             }
         }
 
@@ -1640,6 +1652,7 @@ namespace KevGitChanges
             public string Path { get; set; }
             public bool IsDirectory { get; set; }
             public string WStatus { get; set; }
+            public string SStatus { get; set; }
             public string LStatus { get; set; }
             public string RStatus { get; set; }
             public string MStatus { get; set; }
@@ -1762,8 +1775,27 @@ namespace KevGitChanges
                     var statusPair = line.Substring(0, 2);
                     var path = line.Substring(3).Trim();
                     if (string.IsNullOrWhiteSpace(path)) continue;
-                    var statusChar = ExtractPorcelainStatus(statusPair);
-                    AddScopeStatus(target, path, scope, MapStatusChar(statusChar));
+
+                    // statusPair[0] = index (staged) status, statusPair[1] = worktree (workspace) status
+                    var idx = statusPair[0];
+                    var w = statusPair[1];
+
+                    // Handle untracked files (??) as workspace additions
+                    if (idx == '?' && w == '?')
+                    {
+                        AddScopeStatus(target, path, ChangeScope.Workspace, MapStatusChar('A'));
+                        continue;
+                    }
+
+                    if (idx != ' ' && idx != '\t' && idx != '?')
+                    {
+                        AddScopeStatus(target, path, ChangeScope.Staged, MapStatusChar(idx));
+                    }
+
+                    if (w != ' ' && w != '\t' && w != '?')
+                    {
+                        AddScopeStatus(target, path, ChangeScope.Workspace, MapStatusChar(w));
+                    }
                 }
             }
         }
@@ -1875,6 +1907,11 @@ namespace KevGitChanges
                 item.WStatus = wStatus;
                 any = true;
             }
+            if (ShouldShowScope(ChangeScope.Staged) && scopes.TryGetValue(ChangeScope.Staged, out var sStatus))
+            {
+                item.SStatus = sStatus;
+                any = true;
+            }
             if (ShouldShowScope(ChangeScope.Local) && scopes.TryGetValue(ChangeScope.Local, out var lStatus))
             {
                 item.LStatus = lStatus;
@@ -1967,6 +2004,7 @@ namespace KevGitChanges
         private void UpdateStatusColumnVisibility(System.Collections.Generic.IDictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> scopes)
         {
             WorkspaceColumnVisibility = HasAnyVisibleScopeStatus(scopes, ChangeScope.Workspace) ? Visibility.Visible : Visibility.Collapsed;
+            StagedColumnVisibility = HasAnyVisibleScopeStatus(scopes, ChangeScope.Staged) ? Visibility.Visible : Visibility.Collapsed;
             LocalColumnVisibility = HasAnyVisibleScopeStatus(scopes, ChangeScope.Local) ? Visibility.Visible : Visibility.Collapsed;
             RemoteColumnVisibility = HasAnyVisibleScopeStatus(scopes, ChangeScope.Remote) ? Visibility.Visible : Visibility.Collapsed;
         }
@@ -2047,18 +2085,21 @@ namespace KevGitChanges
                         node.FullPath = it.Path;
                         node.IsDirectory = it.IsDirectory;
                         node.WStatus = it.WStatus;
+                        node.SStatus = it.SStatus;
                         node.LStatus = it.LStatus;
                         node.RStatus = it.RStatus;
                         node.MStatus = it.MStatus;
                         node.WBrush = StatusBrush(it.WStatus);
+                        node.SBrush = StatusBrush(it.SStatus);
                         node.LBrush = StatusBrush(it.LStatus);
                         node.RBrush = StatusBrush(it.RStatus);
                         node.MBrush = StatusBrush(it.MStatus);
                         node.WToolTip = GetScopeDisplay("Workspace");
+                        node.SToolTip = GetScopeDisplay("Staged");
                         node.LToolTip = GetScopeDisplay("Local");
                         node.RToolTip = GetScopeDisplay("Remote");
                         node.MToolTip = GetScopeDisplay("Main");
-                        string[] vars = { it.WStatus, it.LStatus, it.RStatus, it.MStatus };
+                        string[] vars = { it.SStatus, it.WStatus, it.LStatus, it.RStatus, it.MStatus };
                         node.IsDeleted = IsDLeftmost(vars);
                     }
                 }
@@ -2747,7 +2788,8 @@ namespace KevGitChanges
                 }
                 if (OpenFileSeparator != null) OpenFileSeparator.Visibility = Visibility.Visible;
                 if (CompareSeparator != null) CompareSeparator.Visibility = showFileActions;
-                if (CompareWithStagedMenu != null) CompareWithStagedMenu.Visibility = showFileActions;
+                // Only show "Compare vs Staged" when the selected file has both staged and workspace changes
+                if (CompareWithStagedMenu != null) CompareWithStagedMenu.Visibility = (node != null && node.HasWorkspaceAndStaged) ? Visibility.Visible : Visibility.Collapsed;
                 if (CompareWithLocalMenu != null) CompareWithLocalMenu.Visibility = showFileActions;
                 if (CompareWithRemoteMenu != null) CompareWithRemoteMenu.Visibility = showFileActions;
                 if (CompareWithMainMenu != null) CompareWithMainMenu.Visibility = showFileActions;

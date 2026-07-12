@@ -17,6 +17,7 @@
             <SolidColorBrush x:Key="ScopeWBrush" Color="#0EA5E9" />
             <SolidColorBrush x:Key="ScopeLBrush" Color="#8B5CF6" />
             <SolidColorBrush x:Key="ScopeRBrush" Color="#F97316" />
+            <SolidColorBrush x:Key="ScopeSBrush" Color="#10B981" />
             <Color x:Key="FolderBiasColor">#E6C24A</Color>
             <!-- Use Visual Studio themed brushes for tree views -->
             <Style TargetType="TreeView">
@@ -269,6 +270,14 @@
                 </Style.Triggers>
             </Style>
 
+            <Style x:Key="StagedScopeCellStyle" TargetType="StackPanel" BasedOn="{StaticResource ScopeCellStyle}">
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding ElementName=MyToolWindow, Path=StagedColumnVisibility}" Value="Collapsed">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+
             <Style x:Key="RemoteScopeCellStyle" TargetType="StackPanel" BasedOn="{StaticResource ScopeCellStyle}">
                 <Style.Triggers>
                     <DataTrigger Binding="{Binding ElementName=MyToolWindow, Path=RemoteColumnVisibility}" Value="Collapsed">
@@ -293,6 +302,7 @@
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
                     <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,4,0" Style="{StaticResource WorkspaceScopeCellStyle}" Tag="{Binding WStatus}" ToolTip="{Binding WToolTip}">
@@ -301,13 +311,20 @@
                         </Border>
                     </StackPanel>
 
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,4,0" Style="{StaticResource LocalScopeCellStyle}" Tag="{Binding LStatus}" ToolTip="{Binding LToolTip}">
+                    <!-- Staged column -->
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,4,0" Style="{StaticResource StagedScopeCellStyle}" Tag="{Binding SStatus}" ToolTip="{Binding SToolTip}">
+                        <Border Background="{StaticResource ScopeSBrush}" Style="{StaticResource PillBox}">
+                            <TextBlock Text="{Binding SStatus}" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,4,0" Style="{StaticResource LocalScopeCellStyle}" Tag="{Binding LStatus}" ToolTip="{Binding LToolTip}">
                         <Border Background="{StaticResource ScopeLBrush}" Style="{StaticResource PillBox}">
                             <TextBlock Text="{Binding LStatus}" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
                         </Border>
                     </StackPanel>
 
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" Style="{StaticResource RemoteScopeCellStyle}" Tag="{Binding RStatus}" ToolTip="{Binding RToolTip}">
+                    <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Right" Style="{StaticResource RemoteScopeCellStyle}" Tag="{Binding RStatus}" ToolTip="{Binding RToolTip}">
                         <Border Background="{StaticResource ScopeRBrush}" Style="{StaticResource PillBox}">
                             <TextBlock Text="{Binding RStatus}" Foreground="White" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
                         </Border>
@@ -490,6 +507,7 @@
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="26" />
                                     <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="18" />
                                 </Grid.ColumnDefinitions>
                                 <Image Width="20" Height="16" Margin="0,0,4,0" Source="{Binding Icon}" Stretch="None" SnapsToDevicePixels="True" />
                                 <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" TextWrapping="NoWrap" ToolTip="{Binding FullPath}">
@@ -504,6 +522,7 @@
                                         </Style>
                                     </TextBlock.Style>
                                 </TextBlock>
+                                <!-- staged indicator removed; use status columns on the right-hand StatusPresenter -->
                             </Grid>
                         </HierarchicalDataTemplate>
                     </TreeView.ItemTemplate>
