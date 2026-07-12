@@ -13,6 +13,7 @@
     <Grid>
         <Grid.Resources>
             <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+                <local:StringNotEmptyToVisibilityConverter x:Key="StringToVisibility" />
             <local:TreeViewIndentToMarginConverter x:Key="TreeIndentToMargin" />
             <SolidColorBrush x:Key="ScopeWBrush" Color="#0EA5E9" />
             <SolidColorBrush x:Key="ScopeLBrush" Color="#8B5CF6" />
@@ -510,7 +511,52 @@
                                     <ColumnDefinition Width="18" />
                                 </Grid.ColumnDefinitions>
                                 <Image Width="20" Height="16" Margin="0,0,4,0" Source="{Binding Icon}" Stretch="None" SnapsToDevicePixels="True" />
-                                <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" TextWrapping="NoWrap" ToolTip="{Binding FullPath}">
+                                <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" TextWrapping="NoWrap">
+                                    <TextBlock.ToolTip>
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding FullPathAbsolute}" FontWeight="Bold" TextWrapping="NoWrap" />
+                                            <TextBlock Visibility="{Binding WStatus, Converter={StaticResource StringToVisibility}}">
+                                                <TextBlock.Text>
+                                                    <MultiBinding StringFormat="{}{0} - {1}">
+                                                        <Binding Path="WToolTip" />
+                                                        <Binding Path="WStatus" />
+                                                    </MultiBinding>
+                                                </TextBlock.Text>
+                                            </TextBlock>
+                                            <TextBlock Visibility="{Binding SStatus, Converter={StaticResource StringToVisibility}}">
+                                                <TextBlock.Text>
+                                                    <MultiBinding StringFormat="{}{0} - {1}">
+                                                        <Binding Path="SToolTip" />
+                                                        <Binding Path="SStatus" />
+                                                    </MultiBinding>
+                                                </TextBlock.Text>
+                                            </TextBlock>
+                                            <TextBlock Visibility="{Binding LStatus, Converter={StaticResource StringToVisibility}}">
+                                                <TextBlock.Text>
+                                                    <MultiBinding StringFormat="{}{0} - {1}">
+                                                        <Binding Path="LToolTip" />
+                                                        <Binding Path="LStatus" />
+                                                    </MultiBinding>
+                                                </TextBlock.Text>
+                                            </TextBlock>
+                                            <TextBlock Visibility="{Binding RStatus, Converter={StaticResource StringToVisibility}}">
+                                                <TextBlock.Text>
+                                                    <MultiBinding StringFormat="{}{0} - {1}">
+                                                        <Binding Path="RToolTip" />
+                                                        <Binding Path="RStatus" />
+                                                    </MultiBinding>
+                                                </TextBlock.Text>
+                                            </TextBlock>
+                                            <TextBlock Visibility="{Binding MStatus, Converter={StaticResource StringToVisibility}}">
+                                                <TextBlock.Text>
+                                                    <MultiBinding StringFormat="{}{0} - {1}">
+                                                        <Binding Path="MToolTip" />
+                                                        <Binding Path="MStatus" />
+                                                    </MultiBinding>
+                                                </TextBlock.Text>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </TextBlock.ToolTip>
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
                                             <Style.Triggers>

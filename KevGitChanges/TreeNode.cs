@@ -8,6 +8,8 @@ namespace KevGitChanges
     {
         public string Name { get; set; }
         public string FullPath { get; set; }
+        // Absolute filesystem path for tooltips
+        public string FullPathAbsolute { get; set; }
         public List<TreeNode> Children { get; } = new List<TreeNode>();
         public ImageSource Icon { get; set; }
         public ImageMoniker IconMoniker { get; set; }

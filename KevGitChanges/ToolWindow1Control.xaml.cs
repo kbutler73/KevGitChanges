@@ -98,6 +98,8 @@ namespace KevGitChanges
             public System.Collections.Generic.List<string> HiddenPaths { get; set; }
         }
 
+        // (StringNotEmptyToVisibilityConverter moved to its own public type for XAML access)
+
         private readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> scopeMap =
             new System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>>(System.StringComparer.OrdinalIgnoreCase);
 
@@ -2083,6 +2085,15 @@ namespace KevGitChanges
                     if (i == parts.Length - 1)
                     {
                         node.FullPath = it.Path;
+                        // also populate absolute path for tooltips
+                        try
+                        {
+                            node.FullPathAbsolute = ResolveWorkspacePath(it.Path);
+                        }
+                        catch
+                        {
+                            node.FullPathAbsolute = it.Path;
+                        }
                         node.IsDirectory = it.IsDirectory;
                         node.WStatus = it.WStatus;
                         node.SStatus = it.SStatus;

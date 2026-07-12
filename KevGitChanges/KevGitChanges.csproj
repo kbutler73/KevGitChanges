@@ -60,6 +60,7 @@
     <Compile Include="CommittedChangeTextMargin.cs" />
     <Compile Include="CommittedChangeTracker.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="StringNotEmptyToVisibilityConverter.cs" />
     <Compile Include="ToolWindow1.cs" />
     <Compile Include="ToolWindow1Command.cs" />
     <Compile Include="ToolWindow1Control.xaml.cs">
