@@ -1747,7 +1747,7 @@ namespace KevGitChanges
                 string line;
                 while ((line = sr.ReadLine()) != null)
                 {
-                    line = line.Trim();
+                    line = line.TrimEnd('\r');
                     if (string.IsNullOrWhiteSpace(line)) continue;
                     if (line.StartsWith("fatal:", System.StringComparison.OrdinalIgnoreCase) ||
                         line.StartsWith("error:", System.StringComparison.OrdinalIgnoreCase))
@@ -1758,10 +1758,60 @@ namespace KevGitChanges
                     if (parts.Length < 2) continue;
                     var statusToken = parts[0];
                     var statusChar = statusToken.Length > 0 ? statusToken[0] : '?';
-                    var path = parts[parts.Length - 1];
+                    var path = UnquoteGitPath(parts[parts.Length - 1]);
                     AddScopeStatus(target, path, scope, MapStatusChar(statusChar));
                 }
             }
+        }
+
+        private static string UnquoteGitPath(string path)
+        {
+            if (string.IsNullOrEmpty(path) || path.Length < 2 || path[0] != '"' || path[path.Length - 1] != '"')
+            {
+                return path;
+            }
+
+            var result = new System.Text.StringBuilder(path.Length - 2);
+            for (int i = 1; i < path.Length - 1; i++)
+            {
+                var ch = path[i];
+                if (ch != '\\' || i + 1 >= path.Length - 1)
+                {
+                    result.Append(ch);
+                    continue;
+                }
+
+                ch = path[++i];
+                switch (ch)
+                {
+                    case 'a': result.Append('\a'); break;
+                    case 'b': result.Append('\b'); break;
+                    case 'f': result.Append('\f'); break;
+                    case 'n': result.Append('\n'); break;
+                    case 'r': result.Append('\r'); break;
+                    case 't': result.Append('\t'); break;
+                    case 'v': result.Append('\v'); break;
+                    default:
+                        if (ch >= '0' && ch <= '7')
+                        {
+                            int value = ch - '0';
+                            int digits = 1;
+                            while (digits < 3 && i + 1 < path.Length - 1 && path[i + 1] >= '0' && path[i + 1] <= '7')
+                            {
+                                value = (value * 8) + (path[++i] - '0');
+                                digits++;
+                            }
+                            result.Append((char)value);
+                        }
+                        else
+                        {
+                            result.Append(ch);
+                        }
+                        break;
+                }
+            }
+
+            return result.ToString();
         }
 
         private static void AddScopeStatusFromPorcelain(System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<ChangeScope, string>> target, string payload, ChangeScope scope)
@@ -1775,7 +1825,7 @@ namespace KevGitChanges
                     if (string.IsNullOrWhiteSpace(line)) continue;
                     if (line.Length < 4) continue;
                     var statusPair = line.Substring(0, 2);
-                    var path = line.Substring(3).Trim();
+                    var path = UnquoteGitPath(line.Substring(3));
                     if (string.IsNullOrWhiteSpace(path)) continue;
 
                     // statusPair[0] = index (staged) status, statusPair[1] = worktree (workspace) status
@@ -2548,7 +2598,13 @@ namespace KevGitChanges
                     }
                     catch
                     {
-                        System.Diagnostics.Process.Start(full);
+                        // Keep the path as the executable/document name rather than parsing it
+                        // as command-line text; this preserves spaces in the file path.
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = full,
+                            UseShellExecute = true
+                        });
                     }
                 }
             }
